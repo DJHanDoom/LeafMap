@@ -17,7 +17,7 @@ jobs:
           echo "CWD=$(pwd)"
           ls -la
           echo "---- package.json ----"
-          test -f package.json && cat package.json || true
+          test -f package.json && head -n 50 package.json || echo "package.json NOT FOUND"
           echo "---- package-lock.json exists? ----"
           test -f package-lock.json && echo "YES" || echo "NO"
 
@@ -31,7 +31,7 @@ jobs:
           if [ -f package-lock.json ]; then
             npm ci
           else
-            echo "package-lock.json não encontrado no diretório $(pwd). Usando npm install…"
+            echo "package-lock.json não encontrado em $(pwd). Usando npm install…"
             npm install
           fi
 
