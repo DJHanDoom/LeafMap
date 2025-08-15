@@ -1,37 +1,49 @@
 type Props = {
-  onFirstPhoto: (file: File) => void
-  onMorePhotos: (files: File[]) => void
+  onCamera: (file: File) => void
+  onGallery: (files: File[]) => void
 }
 
-export default function PhotoPicker({ onFirstPhoto, onMorePhotos }: Props) {
+export default function PhotoPicker({ onCamera, onGallery }: Props) {
   return (
     <div className="card">
-      <div>
-        <label>Foto inicial (usa EXIF/GPS)</label>
-        <input
-          type="file"
-          accept="image/*"
-          capture="environment"
-          onChange={e => {
-            const f = e.target.files?.[0]
-            if (f) onFirstPhoto(f)
-            if (e.target) (e.target as HTMLInputElement).value = ''
-          }}
-        />
+      <label>Fotos</label>
+      <div className="row">
+        <div>
+          <button
+            onClick={() => {
+              const input = document.createElement('input')
+              input.type = 'file'
+              input.accept = 'image/*'
+              input.capture = 'environment'
+              input.onchange = e => {
+                const f = (e.target as HTMLInputElement).files?.[0]
+                if (f) onCamera(f)
+              }
+              input.click()
+            }}
+          >
+            Tirar foto (Câmera)
+          </button>
+        </div>
+        <div>
+          <button
+            onClick={() => {
+              const input = document.createElement('input')
+              input.type = 'file'
+              input.accept = 'image/*'
+              input.multiple = true
+              input.onchange = e => {
+                const fs = Array.from((e.target as HTMLInputElement).files ?? [])
+                if (fs.length) onGallery(fs)
+              }
+              input.click()
+            }}
+          >
+            Escolher da Galeria
+          </button>
+        </div>
       </div>
-      <div style={{ marginTop: 8 }}>
-        <label>Fotos adicionais</label>
-        <input
-          type="file"
-          accept="image/*"
-          multiple
-          onChange={e => {
-            const fs = Array.from(e.target.files ?? [])
-            if (fs.length) onMorePhotos(fs)
-            if (e.target) (e.target as HTMLInputElement).value = ''
-          }}
-        />
-      </div>
+      <small>Dica: use a câmera para capturar EXIF/GPS quando disponível.</small>
     </div>
   )
 }
