@@ -12,52 +12,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Use Node 20
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      # 🔧 Importante: remover lock gerado no Windows para resolver opcionais nativos no Linux
-      - name: Clean lockfile and node_modules (Linux-friendly install)
+      - name: Show repo tree (debug)
         run: |
-          rm -f package-lock.json
-          rm -rf node_modules
-          npm install
-
-      - name: Build web (Vite)
-        run: npm run build
-
-      - name: Add/Sync Capacitor Android
-        run: |
-          npx cap add android || true
-          npx cap copy android
-          npx cap sync android
-
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Generate Android icons (Capacitor)
-        run: |
-          if [ -f resources/icon.png ]; then
-            npm i -D @capacitor/assets@latest
-            npx @capacitor/assets generate --android --icon resources/icon.png
-          else
-            echo "resources/icon.png não encontrado - pulando geração de ícones"
-          fi
-
-      - name: Grant Gradle permissions
-        run: chmod +x android/gradlew
-
-      - name: Build debug APK
-        working-directory: android
-        run: ./gradlew assembleDebug
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
+          echo "CWD=$(pwd)"
+          ls -la
+          echo "---- package.json ----"
+          head -n 20 package.json || echo "package.json NOT FOUND"
+          echo "---- package-lock.json exists? ----"
