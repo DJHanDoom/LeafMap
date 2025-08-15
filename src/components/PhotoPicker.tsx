@@ -15,13 +15,13 @@ export default function PhotoPicker({ onCamera, onGallery }: Props) {
             input.accept = 'image/*'
             input.capture = 'environment'
             input.onchange = e => {
-              const f = (e.target as HTMLInputElement).files?.[0]
-              if (f) onCamera(f)
+              const file = (e.target as HTMLInputElement).files?.[0]
+              if (file) onCamera(file)
             }
             input.click()
           }}
         >
-          Tirar foto (Câmera)
+          Abrir Câmera
         </button>
 
         <button
