@@ -17,7 +17,7 @@ jobs:
           echo "CWD=$(pwd)"
           ls -la
           echo "---- package.json ----"
-          test -f package.json && head -n 50 package.json || echo "package.json NOT FOUND"
+          head -n 20 package.json || echo "package.json NOT FOUND"
           echo "---- package-lock.json exists? ----"
           test -f package-lock.json && echo "YES" || echo "NO"
 
@@ -26,14 +26,9 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install deps (ci with fallback)
-        run: |
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            echo "package-lock.json não encontrado em $(pwd). Usando npm install…"
-            npm install
-          fi
+      # 🔹 Instala dependências sem travar no npm ci
+      - name: Install deps
+        run: npm install
 
       - name: Build web (Vite)
         run: npm run build
