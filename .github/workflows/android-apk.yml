@@ -17,9 +17,12 @@ jobs:
         with:
           node-version: 20
 
-      # ⚠️ Sempre npm install (evita binários nativos presos no lock do Windows)
-      - name: Install deps
-        run: npm install
+      # 🔧 Importante: remover lock gerado no Windows para resolver opcionais nativos no Linux
+      - name: Clean lockfile and node_modules (Linux-friendly install)
+        run: |
+          rm -f package-lock.json
+          rm -rf node_modules
+          npm install
 
       - name: Build web (Vite)
         run: npm run build
