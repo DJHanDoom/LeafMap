@@ -8,6 +8,10 @@ on:
 jobs:
   build-apk:
     runs-on: ubuntu-latest
+    env:
+      # ⚠️ Força Rollup a usar implementação JS (evita binário nativo por plataforma)
+      ROLLUP_SKIP_NODE_NATIVE: "1"
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -17,20 +21,20 @@ jobs:
         with:
           node-version: 20
 
-      # ✅ Instalação limpa para resolver @rollup/rollup-*-linux (evita lock do Windows)
-      - name: Fresh install (fix rollup optional deps on Linux)
+      # Instalação limpa para não herdar lock do Windows
+      - name: Fresh install (Linux-friendly)
         run: |
           rm -f package-lock.json
           rm -rf node_modules
           npm cache clean --force
           npm install
 
-      - name: Print versions (debug)
+      - name: Print tool versions
         run: |
           node -v
           npm -v
-          node -p "require('vite/package.json').version"
-          node -p "require('rollup/package.json').version"
+          echo "vite:" $(node -p "require('vite/package.json').version")
+          echo "rollup:" $(node -p "require('rollup/package.json').version")
 
       - name: Build web (Vite)
         run: npm run build
@@ -58,7 +62,7 @@ jobs:
 
       - name: Build debug APK
         working-directory: android
-        run: ./gradlew assembleDebug
+        run: ./gradlew assembleDebug --stacktrace --no-daemon
 
       - name: Show outputs (debug)
         run: |
