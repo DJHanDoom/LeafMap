@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { PhotoRef } from '../types'
+
 const CAPTIONS = ['folha','flor','fruto','casca','hábito','ramo','tronco','copa','semente','detalhe']
 
 export default function Gallery({ photos, onChange }: { photos: PhotoRef[]; onChange: (p: PhotoRef[]) => void }) {
@@ -16,12 +17,22 @@ export default function Gallery({ photos, onChange }: { photos: PhotoRef[]; onCh
       <div className="thumbs">
         {photos.map((p, i) => (
           <div key={i} className="thumb">
-            <img src={p.url} alt={p.name ?? `photo-${i}`} onClick={() => setZoom(p)} />
-            <select value={p.caption ?? ''} onChange={e => setCaption(i, e.target.value)} aria-label="Legenda">
-              <option value="">Legenda…</option>
-              {CAPTIONS.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-            <button className="danger" onClick={() => removeAt(i)}>Apagar</button>
+            <img
+              src={p.url}
+              alt={p.name ?? `photo-${i}`}
+              onClick={() => setZoom(p)}
+              title="Toque para ampliar"
+            />
+            <div className="row" style={{ marginTop: 6 }}>
+              <select
+                value={p.caption ?? ''}
+                onChange={e => setCaption(i, e.target.value)}
+              >
+                <option value="">Legenda…</option>
+                {CAPTIONS.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <button className="danger" onClick={() => removeAt(i)}>Apagar</button>
+            </div>
           </div>
         ))}
       </div>
