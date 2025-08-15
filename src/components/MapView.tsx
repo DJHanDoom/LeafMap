@@ -1,14 +1,24 @@
 import { MapContainer, TileLayer, Marker, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
-import type { LatLng } from '../types'
+import type { LatLng, LifeForm } from '../types'
 
-const pin = new L.Icon({
-  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
-  iconSize: [25, 41],
-  iconAnchor: [12, 41]
-})
+// Marcadores por forma de vida (emoji em DivIcon para simplicidade e impacto visual)
+function iconFor(life?: LifeForm) {
+  const emoji =
+    life === 'arvore' ? '🌳' :
+    life === 'arbusto' ? '🌿' :
+    life === 'erva' ? '🍀' :
+    life === 'cipo' ? '🪢' :
+    life === 'epifita' ? '🪴' :
+    life === 'palmeira' ? '🌴' :
+    life === 'liana' ? '🧵' : '📍'
+  return L.divIcon({
+    html: `<div style="font-size:24px;line-height:24px">${emoji}</div>`,
+    className: 'life-pin',
+    iconSize: [24, 24],
+    iconAnchor: [12, 12]
+  })
+}
 
 function ClickHandler({ onClick }: { onClick: (p: LatLng) => void }) {
   useMapEvents({
@@ -19,15 +29,27 @@ function ClickHandler({ onClick }: { onClick: (p: LatLng) => void }) {
   return null
 }
 
-export default function MapView({ center, onMoveMarker }: { center: LatLng, onMoveMarker: (p: LatLng) => void }) {
+export default function MapView({
+  center,
+  lifeForm,
+  onMoveMarker
+}: {
+  center: LatLng
+  lifeForm?: LifeForm
+  onMoveMarker: (p: LatLng) => void
+}) {
   return (
     <div className="card">
-      <div style={{ height: 300 }}>
-        <MapContainer center={[center.lat, center.lng]} zoom={15} style={{ height: '100%' }}>
-          <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+      <label>Posição no mapa (toque para mover / arraste o marcador)</label>
+      <div style={{ height: 320, borderRadius: 12, overflow: 'hidden' }}>
+        <MapContainer center={[center.lat, center.lng]} zoom={18} style={{ height: '100%' }}>
+          <TileLayer
+            attribution="&copy; OpenStreetMap"
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          />
           <Marker
             draggable
-            icon={pin}
+            icon={iconFor(lifeForm)}
             position={[center.lat, center.lng]}
             eventHandlers={{
               dragend(e) {
