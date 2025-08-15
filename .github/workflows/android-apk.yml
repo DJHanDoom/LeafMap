@@ -9,24 +9,57 @@ jobs:
   build-apk:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show repo tree (debug)
+        run: |
+          echo "CWD=$(pwd)"
+          ls -la
+          echo "---- package.json ----"
+          test -f package.json && cat package.json || true
+          echo "---- package-lock.json exists? ----"
+          test -f package-lock.json && echo "YES" || echo "NO"
+
+      - name: Use Node 20
+        uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: npm ci
-      - run: npm run build
-      - run: |
+
+      - name: Install deps (ci with fallback)
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            echo "package-lock.json não encontrado no diretório $(pwd). Usando npm install…"
+            npm install
+          fi
+
+      - name: Build web (Vite)
+        run: npm run build
+
+      - name: Add/Sync Capacitor Android
+        run: |
           npx cap add android || true
           npx cap copy android
           npx cap sync android
-      - uses: actions/setup-java@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
-      - run: chmod +x android/gradlew
-      - working-directory: android
+
+      - name: Grant Gradle permissions
+        run: chmod +x android/gradlew
+
+      - name: Build debug APK
+        working-directory: android
         run: ./gradlew assembleDebug
-      - uses: actions/upload-artifact@v4
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
         with:
           name: app-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
