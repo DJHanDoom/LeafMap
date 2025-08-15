@@ -12,10 +12,55 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show repo tree (debug)
+      - name: Use Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Instala as dependências no Linux (sem travar em lock do Windows)
+      - name: Install deps
+        run: npm install
+
+      - name: Build web (Vite)
+        run: npm run build
+
+      - name: Add/Sync Capacitor Android
         run: |
-          echo "CWD=$(pwd)"
-          ls -la
-          echo "---- package.json ----"
-          head -n 20 package.json || echo "package.json NOT FOUND"
-          echo "---- package-lock.json exists? ----"
+          npx cap add android || true
+          npx cap copy android
+          npx cap sync android
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # Gera ícones/splash se resources/icon.png existir
+      - name: Generate Android assets (Capacitor)
+        if: ${{ hashFiles('resources/icon.png') != '' }}
+        run: |
+          npm i -D @capacitor/assets@latest
+          npx @capacitor/assets generate --android --log
+
+      - name: Grant Gradle permissions
+        run: chmod +x android/gradlew
+
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug
+
+      - name: Show outputs (debug)
+        run: |
+          echo "Listing android/app/build/outputs:"
+          ls -R android/app/build/outputs || true
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          # cobre variantes/pastas comuns (apk debug)
+          path: |
+            android/app/build/outputs/apk/**/app-*-debug.apk
+            android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
