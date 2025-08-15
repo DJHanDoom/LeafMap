@@ -1,27 +1,13 @@
 import { useState } from 'react'
 import type { PhotoRef } from '../types'
+const CAPTIONS = ['folha','flor','fruto','casca','hábito','ramo','tronco','copa','semente','detalhe']
 
-const CAPTIONS = [
-  'folha', 'flor', 'fruto', 'casca', 'hábito', 'ramo', 'tronco', 'copa', 'semente', 'detalhe'
-]
-
-type Props = {
-  photos: PhotoRef[]
-  onChange: (photos: PhotoRef[]) => void
-}
-
-export default function Gallery({ photos, onChange }: Props) {
+export default function Gallery({ photos, onChange }: { photos: PhotoRef[]; onChange: (p: PhotoRef[]) => void }) {
   const [zoom, setZoom] = useState<PhotoRef | null>(null)
-
-  function setCaption(i: number, caption: string) {
-    const clone = [...photos]
-    clone[i] = { ...clone[i], caption }
-    onChange(clone)
+  const setCaption = (i: number, caption: string) => {
+    const clone = [...photos]; clone[i] = { ...clone[i], caption }; onChange(clone)
   }
-  function removeAt(i: number) {
-    const clone = photos.slice(0, i).concat(photos.slice(i + 1))
-    onChange(clone)
-  }
+  const removeAt = (i: number) => onChange(photos.slice(0, i).concat(photos.slice(i + 1)))
 
   return (
     <div className="card">
@@ -31,11 +17,7 @@ export default function Gallery({ photos, onChange }: Props) {
         {photos.map((p, i) => (
           <div key={i} className="thumb">
             <img src={p.url} alt={p.name ?? `photo-${i}`} onClick={() => setZoom(p)} />
-            <select
-              value={p.caption ?? ''}
-              onChange={e => setCaption(i, e.target.value)}
-              aria-label="Legenda"
-            >
+            <select value={p.caption ?? ''} onChange={e => setCaption(i, e.target.value)} aria-label="Legenda">
               <option value="">Legenda…</option>
               {CAPTIONS.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
