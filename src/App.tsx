@@ -2,13 +2,13 @@ import { useEffect, useMemo, useState } from 'react'
 import MapView from './components/MapView'
 import PhotoPicker from './components/PhotoPicker'
 import MorphologyForm from './components/MorphologyForm'
+import Gallery from './components/Gallery'
 import { extractGpsFromFile, extractDateFromFile } from './utils/exif'
 import { loadAll, saveOne, wipeAll } from './storage'
-import type { LatLng, Morphology, TreeRecord } from './types'
+import type { LatLng, Morphology, TreeRecord, LifeForm, PhotoRef } from './types'
 
-const DEFAULT_POS: LatLng = { lat: -23.55052, lng: -46.633308 } // São Paulo (fallback)
+const DEFAULT_POS: LatLng = { lat: -23.55052, lng: -46.633308 } // SP fallback
 
-// pequeno dicionário para autocompletar família a partir do gênero
 function guessFamily(scientific?: string): string | undefined {
   if (!scientific) return undefined
   const genus = scientific.trim().split(/\s+/)[0]?.toLowerCase()
@@ -41,22 +41,54 @@ function uuid() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36)
 }
 
+function Toast({ text }: { text: string }) {
+  return (
+    <div className="toast">
+      {text}
+    </div>
+  )
+}
+
+type Mode = 'coleta' | 'registros'
+
 export default function App() {
+  const [mode, setMode] = useState<Mode>('coleta')
+
+  // estado do formulário
   const [position, setPosition] = useState<LatLng>(DEFAULT_POS)
-  const [photos, setPhotos] = useState<{ url: string; name?: string }[]>([])
+  const [photos, setPhotos] = useState<PhotoRef[]>([])
   const [commonName, setCommonName] = useState('')
   const [scientificName, setScientificName] = useState('')
   const [family, setFamily] = useState<string | undefined>(undefined)
   const [morph, setMorph] = useState<Morphology>({})
-  const [saved, setSaved] = useState<TreeRecord[] | null>(null)
   const [firstPhotoISO, setFirstPhotoISO] = useState<string | undefined>(undefined)
 
-  // carrega registros já salvos
+  // registros salvos
+  const [saved, setSaved] = useState<TreeRecord[] | null>(null)
+
+  // UI
+  const [toast, setToast] = useState<string | null>(null)
+
+  // geolocalização inicial (default)
   useEffect(() => {
-    loadAll().then(setSaved)
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        p => setPosition({ lat: p.coords.latitude, lng: p.coords.longitude }),
+        () => {},
+        { enableHighAccuracy: true, timeout: 5000 }
+      )
+      // atualização em “tempo quase-real”
+      const watch = navigator.geolocation.watchPosition(
+        p => setPosition({ lat: p.coords.latitude, lng: p.coords.longitude }),
+        () => {},
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
+      )
+      return () => navigator.geolocation.clearWatch(watch)
+    }
   }, [])
 
-  // família automática quando o usuário digita o nome científico
+  useEffect(() => { loadAll().then(setSaved) }, [])
+
   useEffect(() => {
     if (scientificName.trim()) {
       const fam = guessFamily(scientificName)
@@ -66,31 +98,28 @@ export default function App() {
 
   const recordId = useMemo(() => uuid(), [])
 
-  async function handleFirstPhoto(file: File) {
+  function showToast(msg: string) {
+    setToast(msg)
+    setTimeout(() => setToast(null), 2000)
+  }
+
+  async function onCamera(file: File) {
     const url = URL.createObjectURL(file)
-    setPhotos(p => (p.length ? [{ url, name: file.name }, ...p] : [{ url, name: file.name }]))
+    setPhotos(p => [{ url, name: file.name, caption: 'hábito' }, ...p]) // primeira foto no topo
+    showToast('📸 Foto capturada')
 
-    // 1) tenta GPS via EXIF
+    // Posiciona o mapa pelo EXIF, se existir
     const gps = await extractGpsFromFile(file)
-    if (gps) {
-      setPosition(gps)
-    } else if (navigator.geolocation) {
-      // 2) se não tiver EXIF, tenta geolocalização do aparelho
-      navigator.geolocation.getCurrentPosition(
-        p => setPosition({ lat: p.coords.latitude, lng: p.coords.longitude }),
-        () => {},
-        { enableHighAccuracy: true, timeout: 5000 }
-      )
-    }
+    if (gps) setPosition(gps)
 
-    // tenta data/hora da foto
     const dt = await extractDateFromFile(file)
     if (dt) setFirstPhotoISO(dt.toISOString())
   }
 
-  function handleMorePhotos(files: File[]) {
+  function onGallery(files: File[]) {
     const extras = files.map(f => ({ url: URL.createObjectURL(f), name: f.name }))
-    setPhotos(p => [...p, ...extras])
+    setPhotos(p => [...extras, ...p]) // também no topo
+    showToast('🖼️ Foto(s) adicionada(s)')
   }
 
   async function saveRecord() {
@@ -109,7 +138,7 @@ export default function App() {
     await saveOne(rec)
     const all = await loadAll()
     setSaved(all)
-    alert('Registro salvo localmente!')
+    showToast('✅ Registro salvo')
   }
 
   function exportJSON() {
@@ -130,14 +159,8 @@ export default function App() {
         type: 'Feature',
         geometry: { type: 'Point', coordinates: [r.position.lng, r.position.lat] },
         properties: {
-          id: r.id,
-          commonName: r.commonName,
-          scientificName: r.scientificName,
-          family: r.family,
-          morphology: r.morphology,
-          photos: r.photos?.map(p => p.url),
-          createdAt: r.createdAt,
-          updatedAt: r.updatedAt
+          id: r.id, commonName: r.commonName, scientificName: r.scientificName, family: r.family,
+          morphology: r.morphology, photos: r.photos?.map(p => p.url), createdAt: r.createdAt, updatedAt: r.updatedAt
         }
       }))
     }
@@ -149,81 +172,123 @@ export default function App() {
     URL.revokeObjectURL(a.href)
   }
 
+  // ---- Tela REGISTROS ----
+  const families = Array.from(new Set((saved ?? []).map(r => r.family).filter(Boolean))) as string[]
+  const [highlightFamily, setHighlightFamily] = useState<string>('')
+
   return (
-    <div className="wrap">
-      <h1>Registro de Árvore (foto → EXIF → mapa)</h1>
-
-      <div className="card">
-        <div
-          className="grid"
-          style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))' }}
-        >
-          <div>
-            <label>Nome popular</label>
-            <input
-              value={commonName}
-              onChange={e => setCommonName(e.target.value)}
-              placeholder="ex.: Ipê-amarelo"
-            />
-          </div>
-          <div>
-            <label>Nome científico</label>
-            <input
-              value={scientificName}
-              onChange={e => setScientificName(e.target.value)}
-              placeholder="ex.: Handroanthus albus"
-              autoCapitalize="none"
-            />
-          </div>
-          <div>
-            <label>Família (auto a partir do nome científico; editável)</label>
-            <input
-              value={family ?? ''}
-              onChange={e => setFamily(e.target.value)}
-              placeholder="ex.: Bignoniaceae"
-            />
-          </div>
+    <div className="wrap app-bg">
+      {/* header com “logo passiflora” simples */}
+      <div className="header">
+        <div className="logo" aria-hidden>✿</div>
+        <div className="title">LeafMap — Registro de Árvores</div>
+        <div className="tabs">
+          <button className={mode === 'coleta' ? 'tab active' : 'tab'} onClick={() => setMode('coleta')}>Coletar</button>
+          <button className={mode === 'registros' ? 'tab active' : 'tab'} onClick={() => setMode('registros')}>Registros</button>
         </div>
       </div>
 
-      <PhotoPicker onFirstPhoto={handleFirstPhoto} onMorePhotos={handleMorePhotos} />
+      {mode === 'coleta' ? (
+        <>
+          <div className="card">
+            <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))' }}>
+              <div>
+                <label>Nome popular</label>
+                <input value={commonName} onChange={e => setCommonName(e.target.value)} placeholder="ex.: Ipê-amarelo" />
+              </div>
+              <div>
+                <label>Nome científico</label>
+                <input
+                  value={scientificName}
+                  onChange={e => setScientificName(e.target.value)}
+                  placeholder="ex.: Handroanthus albus"
+                  autoCapitalize="none"
+                />
+              </div>
+              <div>
+                <label>Família (auto)</label>
+                <input value={family ?? ''} onChange={e => setFamily(e.target.value)} placeholder="ex.: Bignoniaceae" />
+              </div>
+            </div>
+          </div>
 
-      <MapView center={position} onMoveMarker={setPosition} />
+          <PhotoPicker onCamera={onCamera} onGallery={onGallery} />
 
-      <MorphologyForm value={morph} onChange={setMorph} />
+          <MapView center={position} lifeForm={morph.formaVida as LifeForm} onMoveMarker={setPosition} />
 
-      <div className="card">
-        <label>Fotos do indivíduo</label>
-        <div className="photos">
-          {photos.length === 0 ? <div>Nenhuma foto adicionada.</div> : null}
-          {photos.map((p, i) => (
-            <img key={i} src={p.url} alt={p.name ?? `photo-${i}`} />
-          ))}
+          <MorphologyForm value={morph} onChange={setMorph} />
+
+          <Gallery photos={photos} onChange={setPhotos} />
+
+          <div className="card">
+            <div className="row">
+              <button onClick={saveRecord}>Salvar registro</button>
+              <button onClick={exportJSON}>Exportar JSON</button>
+              <button onClick={exportGeoJSON}>Exportar GeoJSON</button>
+              <button
+                onClick={async () => { await wipeAll(); setSaved([]) }}
+                className="danger"
+              >
+                Apagar tudo
+              </button>
+            </div>
+          </div>
+        </>
+      ) : (
+        <div className="card">
+          <div className="row">
+            <div style={{ flex: 1 }}>
+              <label>Filtrar por família</label>
+              <select value={highlightFamily} onChange={e => setHighlightFamily(e.target.value)}>
+                <option value="">Todas</option>
+                {families.map(f => <option key={f} value={f}>{f}</option>)}
+              </select>
+            </div>
+            <div>
+              <button onClick={exportJSON}>Exportar JSON</button>
+            </div>
+          </div>
+
+          {/* Mapa dos registros */}
+          <div style={{ height: 360, borderRadius: 12, overflow: 'hidden', marginTop: 8 }}>
+            {/* mapa simples com markers (sem react-leaflet aqui para não duplicar lógica):
+                Reaproveitaremos MapView renderizando o centro do primeiro, e o usuário pode clicar para explorar */}
+            <MapView
+              center={(saved && saved[0]?.position) || position}
+              lifeForm={undefined}
+              onMoveMarker={() => {}}
+            />
+          </div>
+
+          {/* Lista agrupada por família */}
+          <div style={{ marginTop: 8 }}>
+            {families.length === 0 ? <div>Sem registros ainda.</div> : null}
+            {families
+              .filter(f => (highlightFamily ? f === highlightFamily : true))
+              .map(fam => {
+                const group = (saved ?? []).filter(r => r.family === fam)
+                return (
+                  <div key={fam} className="group">
+                    <h3>{fam} <small>({group.length})</small></h3>
+                    <div className="group-list">
+                      {group.map(r => (
+                        <div key={r.id} className="group-item">
+                          <div><b>{r.commonName ?? '—'}</b></div>
+                          <div><i>{r.scientificName ?? '—'}</i></div>
+                          <div style={{ fontSize: 12 }}>
+                            {r.morphology?.formaVida ? `Forma de vida: ${r.morphology.formaVida}` : ''}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })}
+          </div>
         </div>
-      </div>
+      )}
 
-      <div className="card">
-        <div className="row">
-          <button onClick={saveRecord}>Salvar registro</button>
-          <button onClick={exportJSON}>Exportar JSON</button>
-          <button onClick={exportGeoJSON}>Exportar GeoJSON</button>
-          <button
-            onClick={async () => {
-              await wipeAll()
-              setSaved([])
-            }}
-          >
-            Apagar
-          </button>
-        </div>
-      </div>
-
-      <div className="card">
-        <label>Registros salvos (localmente)</label>
-        <pre style={{ whiteSpace: 'pre-wrap' }}>
-          {saved ? JSON.stringify(saved, null, 2) : '— carregando —'}
-        </pre>
-      </div>
+      {toast ? <Toast text={toast} /> : null}
     </div>
   )
 }
