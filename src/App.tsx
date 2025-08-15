@@ -51,6 +51,7 @@ export default function App() {
   const [saved, setSaved] = useState<TreeRecord[] | null>(null)
   const [firstPhotoISO, setFirstPhotoISO] = useState<string | undefined>(undefined)
 
+  // carrega registros já salvos
   useEffect(() => {
     loadAll().then(setSaved)
   }, [])
@@ -67,13 +68,14 @@ export default function App() {
 
   async function handleFirstPhoto(file: File) {
     const url = URL.createObjectURL(file)
-    setPhotos(p => (p.length ? [ { url, name: file.name }, ...p ] : [ { url, name: file.name } ]))
+    setPhotos(p => (p.length ? [{ url, name: file.name }, ...p] : [{ url, name: file.name }]))
 
     // 1) tenta GPS via EXIF
     const gps = await extractGpsFromFile(file)
-    if (gps) setPosition(gps)
-    // 2) se não tiver, tenta geolocalização do aparelho
-    else if (navigator.geolocation) {
+    if (gps) {
+      setPosition(gps)
+    } else if (navigator.geolocation) {
+      // 2) se não tiver EXIF, tenta geolocalização do aparelho
       navigator.geolocation.getCurrentPosition(
         p => setPosition({ lat: p.coords.latitude, lng: p.coords.longitude }),
         () => {},
@@ -115,7 +117,7 @@ export default function App() {
     const blob = new Blob([JSON.stringify(saved, null, 2)], { type: 'application/json' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
-    a.download = `tree-registry-${new Date().toISOString().slice(0,19)}.json`
+    a.download = `tree-registry-${new Date().toISOString().slice(0, 19)}.json`
     a.click()
     URL.revokeObjectURL(a.href)
   }
@@ -142,7 +144,7 @@ export default function App() {
     const blob = new Blob([JSON.stringify(fc, null, 2)], { type: 'application/geo+json' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
-    a.download = `tree-registry-${new Date().toISOString().slice(0,19)}.geojson`
+    a.download = `tree-registry-${new Date().toISOString().slice(0, 19)}.geojson`
     a.click()
     URL.revokeObjectURL(a.href)
   }
@@ -152,10 +154,17 @@ export default function App() {
       <h1>Registro de Árvore (foto → EXIF → mapa)</h1>
 
       <div className="card">
-        <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))' }}>
+        <div
+          className="grid"
+          style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))' }}
+        >
           <div>
             <label>Nome popular</label>
-            <input value={commonName} onChange={e => setCommonName(e.target.value)} placeholder="ex.: Ipê-amarelo" />
+            <input
+              value={commonName}
+              onChange={e => setCommonName(e.target.value)}
+              placeholder="ex.: Ipê-amarelo"
+            />
           </div>
           <div>
             <label>Nome científico</label>
@@ -168,7 +177,11 @@ export default function App() {
           </div>
           <div>
             <label>Família (auto a partir do nome científico; editável)</label>
-            <input value={family ?? ''} onChange={e => setFamily(e.target.value)} placeholder="ex.: Bignoniaceae" />
+            <input
+              value={family ?? ''}
+              onChange={e => setFamily(e.target.value)}
+              placeholder="ex.: Bignoniaceae"
+            />
           </div>
         </div>
       </div>
@@ -194,16 +207,23 @@ export default function App() {
           <button onClick={saveRecord}>Salvar registro</button>
           <button onClick={exportJSON}>Exportar JSON</button>
           <button onClick={exportGeoJSON}>Exportar GeoJSON</button>
-          <button onClick={async () => { await wipeAll(); setSaved([]); }}>Apagar
-</button>
-</button>
-</button>
-</button>
-</div>
-</div>
-</label>
-</label>
-</label>
-</label>
-</h1>
-</div>
+          <button
+            onClick={async () => {
+              await wipeAll()
+              setSaved([])
+            }}
+          >
+            Apagar
+          </button>
+        </div>
+      </div>
+
+      <div className="card">
+        <label>Registros salvos (localmente)</label>
+        <pre style={{ whiteSpace: 'pre-wrap' }}>
+          {saved ? JSON.stringify(saved, null, 2) : '— carregando —'}
+        </pre>
+      </div>
+    </div>
+  )
+}
