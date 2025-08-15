@@ -9,7 +9,7 @@ jobs:
   build-apk:
     runs-on: ubuntu-latest
     env:
-      # ⚠️ Força Rollup a usar implementação JS (evita binário nativo por plataforma)
+      # Evita depender dos binários nativos do rollup no Linux
       ROLLUP_SKIP_NODE_NATIVE: "1"
 
     steps:
@@ -21,7 +21,7 @@ jobs:
         with:
           node-version: 20
 
-      # Instalação limpa para não herdar lock do Windows
+      # Instalação limpa para resolver opcionais por plataforma (rollup)
       - name: Fresh install (Linux-friendly)
         run: |
           rm -f package-lock.json
@@ -51,11 +51,13 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      # Gera ícones/splash se houver resources/icon.png
       - name: Generate Android assets (Capacitor)
         if: ${{ hashFiles('resources/icon.png') != '' }}
         run: |
           npm i -D @capacitor/assets@latest
-          npx @capacitor/assets generate --android --log
+          # Sem --icon e sem --log (flags removidas)
+          npx @capacitor/assets generate --android
 
       - name: Grant Gradle permissions
         run: chmod +x android/gradlew
