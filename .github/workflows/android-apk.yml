@@ -17,13 +17,9 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install deps (prefer ci; fallback install)
-        run: |
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm install
-          fi
+      # ⚠️ Sempre npm install (evita binários nativos presos no lock do Windows)
+      - name: Install deps
+        run: npm install
 
       - name: Build web (Vite)
         run: npm run build
@@ -40,12 +36,11 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      # 👉 Gera ícones Android a partir de resources/icon.png
       - name: Generate Android icons (Capacitor)
         run: |
           if [ -f resources/icon.png ]; then
-            npm i -D @capacitor/assets
-            npx capacitor-assets generate -i resources/icon.png -a android
+            npm i -D @capacitor/assets@latest
+            npx @capacitor/assets generate --android --icon resources/icon.png
           else
             echo "resources/icon.png não encontrado - pulando geração de ícones"
           fi
