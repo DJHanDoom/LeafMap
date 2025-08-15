@@ -8,66 +8,146 @@ import { extractGpsFromFile, extractDateFromFile } from './utils/exif'
 import { loadAll, saveOne, wipeAll } from './storage'
 import type { LatLng, Morphology, TreeRecord, LifeForm, PhotoRef } from './types'
 
-const DEFAULT_POS: LatLng = { lat: -23.55052, lng: -46.633308 }
+const DEFAULT_POS: LatLng = { lat: -23.55052, lng: -46.633308 } // fallback
 
-function guessFamily(scientific?: string) { /* ... (mesmo dicionário) ... */ 
-  if (!scientific) return undefined
-  const genus = scientific.trim().split(/\s+/)[0]?.toLowerCase()
-  const map: Record<string,string> = { machaerium:'Fabaceae', swartzia:'Fabaceae', inga:'Fabaceae', handroanthus:'Bignoniaceae', tabebuia:'Bignoniaceae', astronium:'Anacardiaceae', schinus:'Anacardiaceae', alchornea:'Euphorbiaceae', croton:'Euphorbiaceae', eugenia:'Myrtaceae', psidium:'Myrtaceae', myrcia:'Myrtaceae', syzygium:'Myrtaceae', ocotea:'Lauraceae', nectandra:'Lauraceae', cecropia:'Urticaceae', licania:'Chrysobalanaceae', aspidosperma:'Apocynaceae', alseis:'Rubiaceae' }
-  return map[genus]
+/** Seed local (fallback) — pode ser pequeno; o arquivo externo amplia a cobertura */
+const SEED_GENUS2FAMILY: Record<string, string> = {
+  // Myrtaceae
+  eugenia: 'Myrtaceae', psidium: 'Myrtaceae', myrcia: 'Myrtaceae', campomanesia: 'Myrtaceae',
+  syzygium: 'Myrtaceae', calyptranthes: 'Myrtaceae', myrciaria: 'Myrtaceae',
+  // Fabaceae (Leguminosae)
+  inga: 'Fabaceae', senna: 'Fabaceae', swartzia: 'Fabaceae', machaerium: 'Fabaceae',
+  dalbergia: 'Fabaceae', copaifera: 'Fabaceae', hymenaea: 'Fabaceae', desmodium: 'Fabaceae',
+  // Bignoniaceae
+  handroanthus: 'Bignoniaceae', tabebuia: 'Bignoniaceae', jacaranda: 'Bignoniaceae',
+  // Lauraceae
+  ocotea: 'Lauraceae', nectandra: 'Lauraceae', persea: 'Lauraceae',
+  // Anacardiaceae
+  schinus: 'Anacardiaceae', astronium: 'Anacardiaceae', anacardium: 'Anacardiaceae',
+  // Euphorbiaceae
+  alchornea: 'Euphorbiaceae', croton: 'Euphorbiaceae',
+  // Rubiaceae
+  psychotria: 'Rubiaceae', alseis: 'Rubiaceae', faramea: 'Rubiaceae',
+  // Apocynaceae
+  aspidosperma: 'Apocynaceae', himatanthus: 'Apocynaceae',
+  // Chrysobalanaceae
+  licania: 'Chrysobalanaceae', hyrtella: 'Chrysobalanaceae', couepia: 'Chrysobalanaceae',
+  // Sapotaceae
+  pouteria: 'Sapotaceae', chrysophyllum: 'Sapotaceae',
+  // Urticaceae, Moraceae
+  cecropia: 'Urticaceae', pourouma: 'Urticaceae', ficus: 'Moraceae',
+  // Malvaceae
+  theobroma: 'Malvaceae', ceiba: 'Malvaceae', luehea: 'Malvaceae',
+  // Melastomataceae
+  miconia: 'Melastomataceae', tibouchina: 'Melastomataceae',
+  // Lauraceae extra
+  cinnamomum: 'Lauraceae',
+  // Piperaceae, Solanaceae
+  piper: 'Piperaceae', solanum: 'Solanaceae', capsicum: 'Solanaceae',
+  // Arecaceae
+  euterpe: 'Arecaceae', attalea: 'Arecaceae', geonoma: 'Arecaceae',
+  // Annonaceae
+  rollinia: 'Annonaceae', guatteria: 'Annonaceae', annona: 'Annonaceae',
+  // Malpighiaceae
+  byrsonima: 'Malpighiaceae', peixotoa: 'Malpighiaceae',
+  // Myristicaceae, Burseraceae
+  virola: 'Myristicaceae', protium: 'Burseraceae'
 }
-const uuid = () => ('randomUUID' in crypto ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36))
+
+const uuid = () =>
+  'randomUUID' in crypto ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36)
+
 type Mode = 'coleta' | 'registros'
 const Toast = ({ text }: { text: string }) => <div className="toast">{text}</div>
+
+const Brand = () => (
+  <div className="brand">
+    {/* Exibe /brand.png no cabeçalho (coloque sua arte em public/brand.png) */}
+    <img src="/brand.png" alt="brand" width={32} height={32} />
+  </div>
+)
 
 export default function App() {
   const [mode, setMode] = useState<Mode>('coleta')
 
+  // coleta
   const [position, setPosition] = useState<LatLng>(DEFAULT_POS)
   const [photos, setPhotos] = useState<PhotoRef[]>([])
   const [firstCandidate, setFirstCandidate] = useState<{ url: string; file: File } | null>(null)
-
   const [commonName, setCommonName] = useState('')
   const [scientificName, setScientificName] = useState('')
   const [family, setFamily] = useState<string | undefined>(undefined)
   const [morph, setMorph] = useState<Morphology>({})
   const [firstPhotoISO, setFirstPhotoISO] = useState<string | undefined>(undefined)
 
+  // registros salvos
   const [saved, setSaved] = useState<TreeRecord[] | null>(null)
+
+  // UI
   const [toast, setToast] = useState<string | null>(null)
   const [recordModal, setRecordModal] = useState<TreeRecord | null>(null)
   const [highlightFamily, setHighlightFamily] = useState<string>('')
+  const [focusCoord, setFocusCoord] = useState<LatLng | null>(null)
 
-  // geo inicial + watch
+  // taxonomia
+  const [genus2family, setGenus2family] = useState<Record<string, string>>(SEED_GENUS2FAMILY)
+
+  // carrega JSON público com mapeamentos (pode ter milhares de gêneros)
   useEffect(() => {
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        p => setPosition({ lat: p.coords.latitude, lng: p.coords.longitude }),
-        () => {},
-        { enableHighAccuracy: true, timeout: 5000 }
-      )
-      const watch = navigator.geolocation.watchPosition(
-        p => setPosition({ lat: p.coords.latitude, lng: p.coords.longitude }),
-        () => {},
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
-      )
-      return () => navigator.geolocation.clearWatch(watch)
-    }
+    fetch('/genus2family.json', { cache: 'no-store' })
+      .then(r => (r.ok ? r.json() : null))
+      .then((remote: Record<string, string> | null) => {
+        if (!remote) return
+        // normaliza para lowercase
+        const norm: Record<string, string> = {}
+        for (const k of Object.keys(remote)) norm[k.trim().toLowerCase()] = remote[k]
+        setGenus2family(prev => ({ ...prev, ...norm }))
+      })
+      .catch(() => {})
+  }, [])
+
+  // geolocalização inicial + watch
+  useEffect(() => {
+    if (!navigator.geolocation) return
+    navigator.geolocation.getCurrentPosition(
+      p => setPosition({ lat: p.coords.latitude, lng: p.coords.longitude }),
+      () => {},
+      { enableHighAccuracy: true, timeout: 5000 }
+    )
+    const watch = navigator.geolocation.watchPosition(
+      p => setPosition({ lat: p.coords.latitude, lng: p.coords.longitude }),
+      () => {},
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
+    )
+    return () => navigator.geolocation.clearWatch(watch)
   }, [])
 
   useEffect(() => { loadAll().then(setSaved) }, [])
-  useEffect(() => { if (scientificName.trim()) { const fam = guessFamily(scientificName); if (fam) setFamily(fam) } }, [scientificName])
+
+  function predictFamily(scientific?: string) {
+    if (!scientific) return undefined
+    const genus = scientific.trim().split(/\s+/)[0]?.toLowerCase()
+    if (!genus) return undefined
+    return genus2family[genus]
+  }
+
+  useEffect(() => {
+    const fam = predictFamily(scientificName)
+    if (fam) setFamily(fam)
+  }, [scientificName, genus2family])
 
   const recordId = useMemo(() => uuid(), [])
-  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 1800) }
 
-  // —— FOTO INICIAL: exigir confirmação para aplicar EXIF no mapa ——
+  const showToast = (msg: string) => {
+    setToast(msg)
+    setTimeout(() => setToast(null), 1800)
+  }
+
+  // —— Confirmar 1ª foto para aplicar EXIF no mapa ——
   async function confirmFirstPhoto() {
     if (!firstCandidate) return
     const { file, url } = firstCandidate
-    // adiciona como 1ª foto
     setPhotos(p => [{ url, name: file.name, caption: 'hábito' }, ...p])
-    // aplica EXIF -> posição
     const gps = await extractGpsFromFile(file)
     if (gps) setPosition(gps)
     const dt = await extractDateFromFile(file)
@@ -76,14 +156,12 @@ export default function App() {
     showToast('📍 Posição atualizada pela foto (EXIF)')
   }
 
-  // entrada da câmera: vira candidato a 1ª foto
   async function onCamera(file: File) {
     const url = URL.createObjectURL(file)
     setFirstCandidate({ url, file })
     showToast('📸 Foto capturada — confirme para definir a posição')
   }
 
-  // entrada da galeria:
   function onGallery(fs: File[]) {
     if (!photos.length && !firstCandidate && fs.length > 0) {
       const [primeira, ...resto] = fs
@@ -104,9 +182,15 @@ export default function App() {
   async function saveRecord() {
     const now = new Date().toISOString()
     const rec: TreeRecord = {
-      id: recordId, position, commonName: commonName || undefined,
-      scientificName: scientificName || undefined, family: family || undefined,
-      morphology: morph, photos, createdAt: firstPhotoISO ?? now, updatedAt: now
+      id: recordId,
+      position,
+      commonName: commonName || undefined,
+      scientificName: scientificName || undefined,
+      family: family || undefined,
+      morphology: morph,
+      photos,
+      createdAt: firstPhotoISO ?? now,
+      updatedAt: now
     }
     await saveOne(rec)
     const all = await loadAll()
@@ -114,22 +198,40 @@ export default function App() {
     showToast('✅ Registro salvo')
   }
 
-  // —— Exportações extras ——
-  function exportJSON() { if (!saved) return; downloadText('application/json', 'json', JSON.stringify(saved, null, 2)) }
+  // —— Exportações ——
+  function exportJSON() {
+    if (!saved) return
+    downloadText('application/json', 'json', JSON.stringify(saved, null, 2))
+  }
   function exportGeoJSON() {
     if (!saved) return
-    const fc = { type:'FeatureCollection', features:(saved).map(r => ({
-      type:'Feature', geometry:{ type:'Point', coordinates:[r.position.lng, r.position.lat]},
-      properties:{ id:r.id, commonName:r.commonName, scientificName:r.scientificName, family:r.family, morphology:r.morphology, photos:r.photos?.map(p=>p.url), createdAt:r.createdAt, updatedAt:r.updatedAt }
-    })) }
+    const fc = {
+      type: 'FeatureCollection',
+      features: saved.map(r => ({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [r.position.lng, r.position.lat] },
+        properties: {
+          id: r.id,
+          commonName: r.commonName,
+          scientificName: r.scientificName,
+          family: r.family,
+          morphology: r.morphology,
+          photos: r.photos?.map(p => p.url),
+          createdAt: r.createdAt,
+          updatedAt: r.updatedAt
+        }
+      }))
+    }
     downloadText('application/geo+json', 'geojson', JSON.stringify(fc, null, 2))
   }
   function exportCSV() {
     if (!saved) return
     const head = ['id','lat','lng','commonName','scientificName','family','formaVida','cap_cm','altura_m','createdAt']
     const rows = saved.map(r => [
-      r.id, r.position.lat, r.position.lng, q(r.commonName), q(r.scientificName), q(r.family),
-      (r.morphology?.formaVida ?? ''), (r.morphology?.cap_cm ?? ''), (r.morphology?.altura_m ?? ''), r.createdAt
+      r.id, r.position.lat, r.position.lng,
+      q(r.commonName), q(r.scientificName), q(r.family),
+      r.morphology?.formaVida ?? '', r.morphology?.cap_cm ?? '', r.morphology?.altura_m ?? '',
+      r.createdAt
     ].join(','))
     downloadText('text/csv', 'csv', [head.join(','), ...rows].join('\n'))
     function q(v?: string){ return v ? `"${String(v).replace(/"/g,'""')}"` : '' }
@@ -147,51 +249,85 @@ export default function App() {
     downloadText('application/vnd.google-earth.kml+xml', 'kml', kml.trim())
     function xml(s:string){ return s.replace(/[<&>]/g, m => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[m] as string)) }
   }
+  function exportGPX() {
+    if (!saved) return
+    const wpts = (saved).map(r => `
+    <wpt lat="${r.position.lat}" lon="${r.position.lng}">
+      <name>${xml(r.commonName ?? r.scientificName ?? r.id)}</name>
+      <time>${r.createdAt}</time>
+    </wpt>`).join('\n')
+    const gpx = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="NervuraColetora" xmlns="http://www.topografix.com/GPX/1/1">
+  ${wpts}
+</gpx>`
+    downloadText('application/gpx+xml', 'gpx', gpx.trim())
+    function xml(s:string){ return s.replace(/[<&>]/g, m => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[m] as string)) }
+  }
+  async function exportXLSX() {
+    if (!saved) return
+    try {
+      const XLSX = await import('xlsx')
+      const rows = saved.map(r => ({
+        id:r.id, lat:r.position.lat, lng:r.position.lng,
+        commonName:r.commonName ?? '', scientificName:r.scientificName ?? '',
+        family:r.family ?? '', formaVida:r.morphology?.formaVida ?? '',
+        cap_cm:r.morphology?.cap_cm ?? '', altura_m:r.morphology?.altura_m ?? '',
+        createdAt:r.createdAt
+      }))
+      const ws = XLSX.utils.json_to_sheet(rows)
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, 'Registros')
+      const out = XLSX.write(wb, { bookType:'xlsx', type:'array' })
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(new Blob([out], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
+      a.download = `nervura-${new Date().toISOString().slice(0,19)}.xlsx`
+      a.click()
+      URL.revokeObjectURL(a.href)
+    } catch { exportCSV() }
+  }
   function downloadText(mime: string, ext: string, txt: string) {
     const a = document.createElement('a')
     a.href = URL.createObjectURL(new Blob([txt], { type: mime }))
-    a.download = `leafmap-${new Date().toISOString().slice(0,19)}.${ext}`
+    a.download = `nervura-${new Date().toISOString().slice(0,19)}.${ext}`
     a.click()
     URL.revokeObjectURL(a.href)
   }
 
-  // —— análise rápida —— 
-  const families = Array.from(new Set((saved ?? []).map(r => r.family).filter(Boolean))) as string[]
+  // análise simples
   const analysis = (() => {
     const byFam = new Map<string, number>(), byLife = new Map<string, number>()
     let capSum=0, capN=0, hSum=0, hN=0
-    (saved ?? []).forEach(r => {
+    ;(saved ?? []).forEach(r => {
       if (r.family) byFam.set(r.family, (byFam.get(r.family) ?? 0)+1)
       const lf = r.morphology?.formaVida ?? ''
       if (lf) byLife.set(lf, (byLife.get(lf) ?? 0)+1)
       if (typeof r.morphology?.cap_cm === 'number') { capSum += r.morphology.cap_cm; capN++ }
       if (typeof r.morphology?.altura_m === 'number') { hSum += r.morphology.altura_m; hN++ }
     })
-    const toObj = (m:Map<string,number>) => Array.from(m.entries()).sort((a,b)=>b[1]-a[1])
-    return { byFam: toObj(byFam), byLife: toObj(byLife), capAvg: capN? capSum/capN : null, hAvg: hN? hSum/hN : null }
+    const sort = (m:Map<string,number>) => Array.from(m.entries()).sort((a,b)=>b[1]-a[1])
+    return { byFam: sort(byFam), byLife: sort(byLife), capAvg: capN? capSum/capN : null, hAvg: hN? hSum/hN : null }
   })()
 
   return (
     <div className="wrap app-bg">
       <div className="header">
-        <div className="logo" aria-hidden>✿</div>
-        <div className="title">LeafMap — Registro de Árvores</div>
+        <Brand />
+        <div className="title">NervuraColetora</div>
         <div className="tabs">
-          <button className={mode==='coleta'?'tab active':'tab'} onClick={() => setMode('coleta')}>Coletar</button>
-          <button className={mode==='registros'?'tab active':'tab'} onClick={() => setMode('registros')}>Registros</button>
+          <button className={mode==='coleta'?'tab active':'tab'} onClick={()=>setMode('coleta')}>Coletar</button>
+          <button className={mode==='registros'?'tab active':'tab'} onClick={()=>setMode('registros')}>Registros</button>
         </div>
       </div>
 
       {mode === 'coleta' ? (
         <>
-          {/* confirmação da 1ª foto */}
           {firstCandidate ? (
-            <div className="card" style={{ borderColor: '#3aa76d' }}>
+            <div className="card gold">
               <label>Confirmar 1ª foto do registro</label>
               <div className="row">
                 <img src={firstCandidate.url} style={{ width: 120, height: 90, objectFit: 'cover', borderRadius: 8 }} />
-                <button onClick={confirmFirstPhoto}>Confirmar 1ª foto (aplicar EXIF/GPS)</button>
-                <button className="danger" onClick={() => setFirstCandidate(null)}>Descartar</button>
+                <button className="gold" onClick={confirmFirstPhoto}>Confirmar 1ª foto (aplicar EXIF/GPS)</button>
+                <button className="secondary" onClick={()=>setFirstCandidate(null)}>Descartar</button>
               </div>
               <small>Ao confirmar, a posição do mapa será atualizada pelo EXIF, se disponível.</small>
             </div>
@@ -225,7 +361,8 @@ export default function App() {
               <button onClick={exportJSON}>Exportar JSON</button>
               <button onClick={exportGeoJSON}>Exportar GeoJSON</button>
               <button onClick={exportCSV}>Exportar CSV</button>
-              <button onClick={exportKML}>Exportar KML</button>
+              <button onClick={exportGPX}>Exportar GPX</button>
+              <button onClick={exportXLSX}>Exportar XLSX</button>
               <button className="danger" onClick={async () => { await wipeAll(); setSaved([]) }}>Apagar tudo</button>
             </div>
           </div>
@@ -244,7 +381,8 @@ export default function App() {
               <button onClick={exportJSON}>JSON</button>
               <button onClick={exportGeoJSON}>GeoJSON</button>
               <button onClick={exportCSV}>CSV</button>
-              <button onClick={exportKML}>KML</button>
+              <button onClick={exportGPX}>GPX</button>
+              <button onClick={exportXLSX}>XLSX</button>
             </div>
           </div>
 
@@ -252,7 +390,8 @@ export default function App() {
             <RecordsMap
               records={(saved ?? []).filter(r => (highlightFamily ? r.family === highlightFamily : true))}
               center={(saved && saved[0]?.position) || position}
-              onOpenRecord={setRecordModal}
+              onOpenRecord={r => { setRecordModal(r); setFocusCoord(r.position) }}
+              focus={focusCoord}
             />
           </div>
 
@@ -265,7 +404,6 @@ export default function App() {
         </div>
       )}
 
-      {/* modal de visualização de registro salvo */}
       {recordModal ? (
         <div className="modal" onClick={() => setRecordModal(null)}>
           <div className="modal-content" onClick={e => e.stopPropagation()}>
@@ -274,12 +412,13 @@ export default function App() {
                 <div><b>{recordModal.commonName ?? '—'}</b></div>
                 <div><i>{recordModal.scientificName ?? '—'}</i></div>
                 {recordModal.family ? <div>Família: {recordModal.family}</div> : null}
+                {recordModal.morphology?.formaVida ? <div>Forma de vida: {recordModal.morphology.formaVida}</div> : null}
               </div>
               <button onClick={() => setRecordModal(null)}>Fechar</button>
             </div>
             <div className="thumbs" style={{ marginTop: 8 }}>
               {recordModal.photos?.map((p,i) => (
-                <div key={i} className="thumb"><img src={p.url} alt={p.name ?? `photo-${i}`} /></div>
+                <div key={i} className="thumb"><img src={p.url} alt={p.name ?? `photo-${i}`} />{p.caption ? <small style={{opacity:.75}}>{p.caption}</small> : null}</div>
               ))}
             </div>
           </div>
