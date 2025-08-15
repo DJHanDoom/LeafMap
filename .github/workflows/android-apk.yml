@@ -17,9 +17,20 @@ jobs:
         with:
           node-version: 20
 
-      # Instala as dependências no Linux (sem travar em lock do Windows)
-      - name: Install deps
-        run: npm install
+      # ✅ Instalação limpa para resolver @rollup/rollup-*-linux (evita lock do Windows)
+      - name: Fresh install (fix rollup optional deps on Linux)
+        run: |
+          rm -f package-lock.json
+          rm -rf node_modules
+          npm cache clean --force
+          npm install
+
+      - name: Print versions (debug)
+        run: |
+          node -v
+          npm -v
+          node -p "require('vite/package.json').version"
+          node -p "require('rollup/package.json').version"
 
       - name: Build web (Vite)
         run: npm run build
@@ -36,7 +47,6 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      # Gera ícones/splash se resources/icon.png existir
       - name: Generate Android assets (Capacitor)
         if: ${{ hashFiles('resources/icon.png') != '' }}
         run: |
@@ -59,7 +69,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: app-debug-apk
-          # cobre variantes/pastas comuns (apk debug)
           path: |
             android/app/build/outputs/apk/**/app-*-debug.apk
             android/app/build/outputs/apk/debug/app-debug.apk
