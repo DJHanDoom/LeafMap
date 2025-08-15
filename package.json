@@ -1,7 +1,8 @@
 {
-  "name": "tree-registry",
-  "private": true,
+  "name": "nervura-coletora",
   "version": "0.0.1",
+  "private": true,
+  "description": "NervuraColetora — coleta e mapa de plantas com fotos (EXIF), Leaflet e exportações (JSON/GeoJSON/CSV/GPX/XLSX).",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -19,14 +20,26 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
-  "@capacitor/android": "^6.1.2",
-  "@capacitor/cli": "^6.1.2",
-  "@types/leaflet": "^1.9.12",
-  "@types/react": "^18.3.6",
-  "@types/react-dom": "^18.3.0",
-  "@vitejs/plugin-react": "^4.3.1",
-  "rollup": "^4.21.0",
-  "typescript": "^5.5.4",
-  "vite": "^5.4.1"
-}
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/cli": "^6.1.2",
+    "@types/leaflet": "^1.9.12",
+    "@types/react": "^18.3.6",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "rollup": "^4.21.0",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.1"
+  },
+  "keywords": [
+    "capacitor",
+    "react",
+    "vite",
+    "leaflet",
+    "exif",
+    "plants",
+    "geojson",
+    "xlsx"
+  ],
+  "author": "Diogo Bueno Kanouté",
+  "license": "MIT"
 }
