@@ -195,3 +195,4 @@ export default function App() {
           <button onClick={exportJSON}>Exportar JSON</button>
           <button onClick={exportGeoJSON}>Exportar GeoJSON</button>
           <button onClick={async () => { await wipeAll(); setSaved([]); }}>Apagar
+</button>
