@@ -13,26 +13,19 @@ export type LifeForm =
 export type PhotoRef = {
   url: string
   name?: string
-  caption?: string // legenda básica
+  caption?: string
 }
 
 export type Morphology = {
-  filotaxia?: 'alternas' | 'opostas' | 'verticiladas' | 'subopostas'
-  tipoFoliar?: 'simples' | 'imparipinada' | 'paripinada' | 'trifoliolada' | 'unifoliolada'
-  margem?: 'inteira' | 'serrada' | 'dentada' | 'lobada' | 'ondulada' | 'crenada'
-  venacao?: 'pinnada' | 'palmada' | 'broquidodroma' | 'campilodroma' | 'eucamptodroma'
-  estipulas?: 'ausentes' | 'presentes' | 'espinescentes' | 'caducas' | 'persistentes'
-  armaduraRamo?: 'ausente' | 'aculeos' | 'espinhos' | 'estípulas-espinescentes'
-  casca?: 'lisa' | 'fissurada' | 'escamosa' | 'descamante' | 'reticulada'
-  exsudato?: 'ausente' | 'leitoso' | 'resinoso' | 'aquoso'
-  // novos:
-  formaVida?: LifeForm
-  flores?: { presenca?: 'nao' | 'sim' | 'ind' ; descricao?: string }
-  frutos?: { presenca?: 'nao' | 'sim' | 'ind' ; descricao?: string }
-  saude?: 'boa' | 'regular' | 'ruim' | 'ind'
-  cap_cm?: number | null   // CAP em cm
-  altura_m?: number | null // altura em m
-  camposPersonalizados?: Array<{ rotulo: string; valor: string }>
+  formaVida?: LifeForm | string
+  floresPresenca?: boolean
+  floresDescricao?: string
+  frutosPresenca?: boolean
+  frutosDescricao?: string
+  saude?: 'saudavel' | 'regular' | 'debilitado' | 'morto' | string
+  cap_cm?: number
+  altura_m?: number
+  camposPersonalizaveis?: Record<string, string>
   observacoesLivres?: string
 }
 
