@@ -10,48 +10,24 @@ import type { LatLng, Morphology, TreeRecord, LifeForm, PhotoRef } from './types
 
 const DEFAULT_POS: LatLng = { lat: -23.55052, lng: -46.633308 } // fallback
 
-/** Seed local (fallback) — pode ser pequeno; o arquivo externo amplia a cobertura */
+/** Seed local (fallback). O arquivo /genus2family.json amplia a cobertura em runtime. */
 const SEED_GENUS2FAMILY: Record<string, string> = {
   // Myrtaceae
-  eugenia: 'Myrtaceae', psidium: 'Myrtaceae', myrcia: 'Myrtaceae', campomanesia: 'Myrtaceae',
-  syzygium: 'Myrtaceae', calyptranthes: 'Myrtaceae', myrciaria: 'Myrtaceae',
-  // Fabaceae (Leguminosae)
-  inga: 'Fabaceae', senna: 'Fabaceae', swartzia: 'Fabaceae', machaerium: 'Fabaceae',
-  dalbergia: 'Fabaceae', copaifera: 'Fabaceae', hymenaea: 'Fabaceae', desmodium: 'Fabaceae',
+  eugenia: 'Myrtaceae', psidium: 'Myrtaceae', myrcia: 'Myrtaceae', myrciaria: 'Myrtaceae',
+  calyptranthes: 'Myrtaceae', campomanesia: 'Myrtaceae', syzygium: 'Myrtaceae', plinia: 'Myrtaceae',
+  // Fabaceae
+  inga: 'Fabaceae', swartzia: 'Fabaceae', machaerium: 'Fabaceae', dalbergia: 'Fabaceae', copaifera: 'Fabaceae',
+  hymenaea: 'Fabaceae', senna: 'Fabaceae', andira: 'Fabaceae',
   // Bignoniaceae
   handroanthus: 'Bignoniaceae', tabebuia: 'Bignoniaceae', jacaranda: 'Bignoniaceae',
   // Lauraceae
-  ocotea: 'Lauraceae', nectandra: 'Lauraceae', persea: 'Lauraceae',
-  // Anacardiaceae
-  schinus: 'Anacardiaceae', astronium: 'Anacardiaceae', anacardium: 'Anacardiaceae',
-  // Euphorbiaceae
-  alchornea: 'Euphorbiaceae', croton: 'Euphorbiaceae',
-  // Rubiaceae
-  psychotria: 'Rubiaceae', alseis: 'Rubiaceae', faramea: 'Rubiaceae',
+  ocotea: 'Lauraceae', nectandra: 'Lauraceae', persea: 'Lauraceae', cinnamomum: 'Lauraceae', aniba: 'Lauraceae',
   // Apocynaceae
   aspidosperma: 'Apocynaceae', himatanthus: 'Apocynaceae',
-  // Chrysobalanaceae
-  licania: 'Chrysobalanaceae', hyrtella: 'Chrysobalanaceae', couepia: 'Chrysobalanaceae',
-  // Sapotaceae
-  pouteria: 'Sapotaceae', chrysophyllum: 'Sapotaceae',
-  // Urticaceae, Moraceae
-  cecropia: 'Urticaceae', pourouma: 'Urticaceae', ficus: 'Moraceae',
-  // Malvaceae
-  theobroma: 'Malvaceae', ceiba: 'Malvaceae', luehea: 'Malvaceae',
-  // Melastomataceae
-  miconia: 'Melastomataceae', tibouchina: 'Melastomataceae',
-  // Lauraceae extra
-  cinnamomum: 'Lauraceae',
-  // Piperaceae, Solanaceae
-  piper: 'Piperaceae', solanum: 'Solanaceae', capsicum: 'Solanaceae',
-  // Arecaceae
-  euterpe: 'Arecaceae', attalea: 'Arecaceae', geonoma: 'Arecaceae',
-  // Annonaceae
-  rollinia: 'Annonaceae', guatteria: 'Annonaceae', annona: 'Annonaceae',
-  // Malpighiaceae
-  byrsonima: 'Malpighiaceae', peixotoa: 'Malpighiaceae',
-  // Myristicaceae, Burseraceae
-  virola: 'Myristicaceae', protium: 'Burseraceae'
+  // Anacardiaceae
+  schinus: 'Anacardiaceae', astronium: 'Anacardiaceae', anacardium: 'Anacardiaceae',
+  // Urticaceae / Moraceae
+  cecropia: 'Urticaceae', pourouma: 'Urticaceae', ficus: 'Moraceae'
 }
 
 const uuid = () =>
@@ -62,7 +38,7 @@ const Toast = ({ text }: { text: string }) => <div className="toast">{text}</div
 
 const Brand = () => (
   <div className="brand">
-    {/* Exibe /brand.png no cabeçalho (coloque sua arte em public/brand.png) */}
+    {/* Mostra /brand.png; coloque sua arte em public/brand.png */}
     <img src="/brand.png" alt="brand" width={32} height={32} />
   </div>
 )
@@ -80,7 +56,7 @@ export default function App() {
   const [morph, setMorph] = useState<Morphology>({})
   const [firstPhotoISO, setFirstPhotoISO] = useState<string | undefined>(undefined)
 
-  // registros salvos
+  // registros
   const [saved, setSaved] = useState<TreeRecord[] | null>(null)
 
   // UI
@@ -89,16 +65,15 @@ export default function App() {
   const [highlightFamily, setHighlightFamily] = useState<string>('')
   const [focusCoord, setFocusCoord] = useState<LatLng | null>(null)
 
-  // taxonomia
+  // taxonomia (gênero -> família)
   const [genus2family, setGenus2family] = useState<Record<string, string>>(SEED_GENUS2FAMILY)
 
-  // carrega JSON público com mapeamentos (pode ter milhares de gêneros)
+  // carrega JSON público (amplia a base de mapeamento)
   useEffect(() => {
     fetch('/genus2family.json', { cache: 'no-store' })
       .then(r => (r.ok ? r.json() : null))
       .then((remote: Record<string, string> | null) => {
         if (!remote) return
-        // normaliza para lowercase
         const norm: Record<string, string> = {}
         for (const k of Object.keys(remote)) norm[k.trim().toLowerCase()] = remote[k]
         setGenus2family(prev => ({ ...prev, ...norm }))
@@ -203,11 +178,12 @@ export default function App() {
     if (!saved) return
     downloadText('application/json', 'json', JSON.stringify(saved, null, 2))
   }
+
   function exportGeoJSON() {
     if (!saved) return
     const fc = {
       type: 'FeatureCollection',
-      features: saved.map(r => ({
+      features: (saved).map(r => ({
         type: 'Feature',
         geometry: { type: 'Point', coordinates: [r.position.lng, r.position.lat] },
         properties: {
@@ -224,6 +200,7 @@ export default function App() {
     }
     downloadText('application/geo+json', 'geojson', JSON.stringify(fc, null, 2))
   }
+
   function exportCSV() {
     if (!saved) return
     const head = ['id','lat','lng','commonName','scientificName','family','formaVida','cap_cm','altura_m','createdAt']
@@ -236,6 +213,7 @@ export default function App() {
     downloadText('text/csv', 'csv', [head.join(','), ...rows].join('\n'))
     function q(v?: string){ return v ? `"${String(v).replace(/"/g,'""')}"` : '' }
   }
+
   function exportKML() {
     if (!saved) return
     const placemarks = (saved).map(r => `
@@ -249,6 +227,7 @@ export default function App() {
     downloadText('application/vnd.google-earth.kml+xml', 'kml', kml.trim())
     function xml(s:string){ return s.replace(/[<&>]/g, m => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[m] as string)) }
   }
+
   function exportGPX() {
     if (!saved) return
     const wpts = (saved).map(r => `
@@ -263,10 +242,13 @@ export default function App() {
     downloadText('application/gpx+xml', 'gpx', gpx.trim())
     function xml(s:string){ return s.replace(/[<&>]/g, m => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[m] as string)) }
   }
+
+  // ⬇️ CORRIGIDO: usa build ESM do SheetJS (xlsx) para evitar erro de resolução do Vite/Rollup
   async function exportXLSX() {
     if (!saved) return
     try {
-      const XLSX = await import('xlsx')
+      // @ts-ignore (tipos via shim em src/types/xlsx-mjs.d.ts)
+      const XLSX = await import('xlsx/dist/xlsx.mjs')
       const rows = saved.map(r => ({
         id:r.id, lat:r.position.lat, lng:r.position.lng,
         commonName:r.commonName ?? '', scientificName:r.scientificName ?? '',
@@ -283,8 +265,11 @@ export default function App() {
       a.download = `nervura-${new Date().toISOString().slice(0,19)}.xlsx`
       a.click()
       URL.revokeObjectURL(a.href)
-    } catch { exportCSV() }
+    } catch {
+      exportCSV()
+    }
   }
+
   function downloadText(mime: string, ext: string, txt: string) {
     const a = document.createElement('a')
     a.href = URL.createObjectURL(new Blob([txt], { type: mime }))
