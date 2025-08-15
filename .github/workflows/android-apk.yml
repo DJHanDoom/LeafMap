@@ -14,7 +14,7 @@ jobs:
 
       - name: Show repo tree (debug)
         run: |
-          echo "CWD=$(pwd)"
+          echo "📂 Current directory: $(pwd)"
           ls -la
           echo "---- package.json ----"
           head -n 20 package.json || echo "package.json NOT FOUND"
@@ -26,9 +26,16 @@ jobs:
         with:
           node-version: 20
 
-      # 🔹 Instala dependências sem travar no npm ci
-      - name: Install deps
-        run: npm install
+      # Instala dependências sem travar no npm ci
+      - name: Install deps (ci with fallback)
+        run: |
+          if [ -f package-lock.json ]; then
+            echo "✅ package-lock.json encontrado. Usando npm ci..."
+            npm ci
+          else
+            echo "⚠️ package-lock.json não encontrado. Usando npm install..."
+            npm install
+          fi
 
       - name: Build web (Vite)
         run: npm run build
