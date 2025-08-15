@@ -12,28 +12,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Show repo tree (debug)
-        run: |
-          echo "📂 Current directory: $(pwd)"
-          ls -la
-          echo "---- package.json ----"
-          head -n 20 package.json || echo "package.json NOT FOUND"
-          echo "---- package-lock.json exists? ----"
-          test -f package-lock.json && echo "YES" || echo "NO"
-
       - name: Use Node 20
         uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      # Instala dependências sem travar no npm ci
-      - name: Install deps (ci with fallback)
+      - name: Install deps (prefer ci; fallback install)
         run: |
           if [ -f package-lock.json ]; then
-            echo "✅ package-lock.json encontrado. Usando npm ci..."
             npm ci
           else
-            echo "⚠️ package-lock.json não encontrado. Usando npm install..."
             npm install
           fi
 
@@ -51,6 +39,16 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
+
+      # 👉 Gera ícones Android a partir de resources/icon.png
+      - name: Generate Android icons (Capacitor)
+        run: |
+          if [ -f resources/icon.png ]; then
+            npm i -D @capacitor/assets
+            npx capacitor-assets generate -i resources/icon.png -a android
+          else
+            echo "resources/icon.png não encontrado - pulando geração de ícones"
+          fi
 
       - name: Grant Gradle permissions
         run: chmod +x android/gradlew
