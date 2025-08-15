@@ -1,51 +1,35 @@
 <!doctype html>
-<html lang="pt-br">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Tree Registry</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
-<style>
-  :root{
-    --black:#0b0b0b;
-    --green-dark:#0F5132;
-    --green:#198754;
-    --gold:#C9A227;
-    --white:#FFFFFF;
-    --text:#E6E6E6;
-  }
-  html,body,#root{height:100%}
-  body{margin:0;font:14px/1.45 system-ui,Segoe UI,Roboto;background:var(--black);color:var(--text)}
-  .app-bg{background:linear-gradient(180deg,rgba(0,0,0,.0),rgba(0,0,0,.25))}
-  .wrap{max-width:1024px;margin:0 auto;padding:16px}
-  .header{display:flex;align-items:center;gap:12px;margin-bottom:12px}
-  .brand img{width:32px;height:32px;border-radius:8px;border:2px solid var(--gold);box-shadow:0 2px 8px rgba(0,0,0,.35)}
-  .title{font-weight:900;color:var(--white)}
-  .tabs{margin-left:auto;display:flex;gap:8px}
-  .tab{background:transparent;border:1px solid var(--green);color:var(--white);padding:6px 10px;border-radius:10px}
-  .tab.active{background:var(--green);border-color:var(--green);color:#fff}
-  .card{border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:12px;background:rgba(20,20,20,.75);backdrop-filter:blur(6px);margin-bottom:12px}
-  .card.gold{border-color:var(--gold)}
-  .grid{display:grid;gap:10px}
-  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-  label{display:block;font-weight:700;margin:4px 0;color:var(--white)}
-  input,select,textarea{width:100%;padding:9px 10px;border:1px solid rgba(255,255,255,.15);border-radius:10px;background:#111;color:var(--text)}
-  button{padding:9px 12px;border:1px solid var(--green-dark);background:var(--green-dark);color:#fff;border-radius:10px;cursor:pointer}
-  button.secondary{background:transparent;border-color:rgba(255,255,255,.25)}
-  button.gold{background:var(--gold);border-color:var(--gold);color:#1b1b1b}
-  button.danger{background:#b91c1c;border-color:#b91c1c}
-  .thumbs{display:flex;gap:10px;flex-wrap:wrap}
-  .thumb{border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:8px;background:#121212}
-  .thumb img{width:140px;height:90px;object-fit:cover;border-radius:8px;cursor:pointer}
-  .modal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;padding:16px;z-index:50}
-  .modal-content{background:#161616;border:1px solid rgba(255,255,255,.1);border-radius:12px;padding:12px;max-width:96%}
-  .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:16px;background:var(--green);color:#fff;padding:8px 12px;border-radius:10px;z-index:60;border:1px solid var(--gold)}
-  .life-pin{filter: drop-shadow(0 1px 2px rgba(0,0,0,.6));}
-</style>
-
-</head>
-<body>
-  <div id="root"></div>
-  <script type="module" src="/src/main.tsx"></script>
-</body>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NervuraColetora</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        background-color: #000; /* fundo preto */
+        color: #d4af37; /* dourado */
+        font-family: "Segoe UI", Roboto, sans-serif;
+      }
+      #root {
+        height: 100vh;
+        width: 100vw;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .loading {
+        color: #32cd32; /* verde vivo */
+        font-size: 1.2rem;
+        font-weight: bold;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div class="loading">Carregando NervuraColetora...</div>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>
