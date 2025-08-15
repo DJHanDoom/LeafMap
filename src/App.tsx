@@ -245,10 +245,32 @@ export default function App() {
 
   // ⬇️ CORRIGIDO: usa build ESM do SheetJS (xlsx) para evitar erro de resolução do Vite/Rollup
   async function exportXLSX() {
-    if (!saved) return
+  if (!saved) return
+  try {
+    // build ESM do SheetJS — caminho correto nesta versão
+    // @ts-ignore (tipos via shim em src/types/xlsx-mjs.d.ts)
+    const XLSX = await import('xlsx/xlsx.mjs')
+    const rows = saved.map(r => ({
+      id:r.id, lat:r.position.lat, lng:r.position.lng,
+      commonName:r.commonName ?? '', scientificName:r.scientificName ?? '',
+      family:r.family ?? '', formaVida:r.morphology?.formaVida ?? '',
+      cap_cm:r.morphology?.cap_cm ?? '', altura_m:r.morphology?.altura_m ?? '',
+      createdAt:r.createdAt
+    }))
+    const ws = XLSX.utils.json_to_sheet(rows)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Registros')
+    const out = XLSX.write(wb, { bookType:'xlsx', type:'array' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(new Blob([out], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
+    a.download = `nervura-${new Date().toISOString().slice(0,19)}.xlsx`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  } catch (err) {
     try {
-      // @ts-ignore (tipos via shim em src/types/xlsx-mjs.d.ts)
-      const XLSX = await import('xlsx/dist/xlsx.mjs')
+      // fallback: deixar Vite resolver a entrada padrão
+      // @ts-ignore
+      const XLSX = await import('xlsx')
       const rows = saved.map(r => ({
         id:r.id, lat:r.position.lat, lng:r.position.lng,
         commonName:r.commonName ?? '', scientificName:r.scientificName ?? '',
@@ -266,9 +288,11 @@ export default function App() {
       a.click()
       URL.revokeObjectURL(a.href)
     } catch {
+      // se ainda assim falhar, cai para CSV
       exportCSV()
     }
   }
+}
 
   function downloadText(mime: string, ext: string, txt: string) {
     const a = document.createElement('a')
