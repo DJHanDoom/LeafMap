@@ -1,890 +1,641 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import MapView from './components/MapView'
-import RecordsMap from './components/RecordsMap'
-import PhotoPicker from './components/PhotoPicker'
-import MorphologyForm from './components/MorphologyForm'
-import Gallery from './components/Gallery'
-import { extractGpsFromFile, extractDateFromFile } from './utils/exif'
-import { loadAll, saveOne, wipeAll, removeOne, getOne, upsertMany } from './storage'
-import type { LatLng, LifeForm, Morphology, PhotoRef, TreeRecord } from './types'
+// src/App.tsx
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { MapContainer, TileLayer, Marker, Popup, useMap, CircleMarker } from 'react-leaflet'
+import L, { LatLngExpression, Icon } from 'leaflet'
+import 'leaflet/dist/leaflet.css'
 import { Capacitor } from '@capacitor/core'
-import { Filesystem, Directory, Encoding } from '@capacitor/filesystem'
-import { Share } from '@capacitor/share'
 import { Geolocation } from '@capacitor/geolocation'
-import './theme.css'
+import { Share } from '@capacitor/share'
+import { Filesystem, Directory, Encoding } from '@capacitor/filesystem'
+import genus2family from '../public/genus2family.json' assert { type: 'json' }
 
-/** ----------------- Constantes / helpers ----------------- */
-const UFRRJ: LatLng = { lat: -22.745, lng: -43.701 }
-const BR_CENTER: LatLng = { lat: -15.78, lng: -47.93 }
-const uuid = () =>
-  ('randomUUID' in crypto ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36))
-type Mode = 'coleta' | 'registros'
-type ColetaTab = 'id' | 'map' | 'morph' | 'photos'
-type RegTab = 'list' | 'map'
+// Storage simples (padrão IDB + fallback em memória)
+import { loadAll, saveOne, wipeAll, removeOne, getOne } from './storage'
 
-const Brand = () => (
-  <div className="brand">
-    <img src="/brand.png" alt="brand" width={28} height={28} />
-    <span>NervuraColetora</span>
-  </div>
-)
-
-const Section = ({ title, children }: { title: string; children: any }) => (
-  <section className="card">
-    <h3>{title}</h3>
-    {children}
-  </section>
-)
-
-const Toast = ({ text }: { text: string }) => <div className="toast">{text}</div>
-
-function pingResize() {
-  try {
-    window.dispatchEvent(new Event('resize'))
-    setTimeout(() => window.dispatchEvent(new Event('resize')), 120)
-  } catch {}
+// Tipos
+type LifeForm = 'árvore' | 'arbusto' | 'erva' | 'cipó' | 'epífita' | 'palmeira' | 'outra'
+type PhotoRef = { id: string; name?: string; caption?: string; uri?: string; blobUrl?: string }
+type Morphology = {
+  lifeForm?: LifeForm
+  flowers?: string
+  fruits?: string
+  health?: string
+  leafType?: string
+  leafMargin?: string
+  phyllotaxy?: string
+  venation?: string
+  bark?: string
+  capCm?: number | ''
+  heightM?: number | ''
+}
+type TreeRecord = {
+  id: string
+  popular?: string
+  scientific?: string
+  family?: string
+  lat?: number
+  lng?: number
+  dateISO?: string
+  notes?: string
+  morphology?: Morphology
+  photos?: PhotoRef[]
 }
 
-function lifeFormEmoji(lf?: LifeForm) {
-  switch (lf) {
-    case 'árvore':
-      return '🌳'
-    case 'arbusto':
-      return '🌿'
-    case 'erva':
-      return '🍃'
-    case 'cipó':
-      return '🪢'
-    case 'epífita':
-      return '🪴'
-    case 'palmeira':
-      return '🌴'
-    default:
-      return '📍'
-  }
+// --------- util de ícone por forma de vida
+const lifeIcon = (life?: LifeForm) => {
+  const emoji =
+    life === 'árvore' ? '🌳' :
+    life === 'arbusto' ? '🌿' :
+    life === 'erva' ? '🍃' :
+    life === 'cipó' ? '🪴' :
+    life === 'epífita' ? '🌱' :
+    life === 'palmeira' ? '🌴' : '📍'
+  return new Icon({
+    iconUrl:
+      `data:image/svg+xml;charset=utf8,` +
+      encodeURIComponent(`
+<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44">
+  <circle cx="22" cy="22" r="22" fill="#134E4A"/>
+  <text x="50%" y="54%" text-anchor="middle" font-size="22"> ${emoji}</text>
+</svg>`),
+    iconSize: [44, 44],
+    iconAnchor: [22, 44],
+    popupAnchor: [0, -44]
+  })
 }
 
-/** tenta pegar Município/UF via Nominatim (best-effort) */
-async function reverseGeocode(lat: number, lng: number): Promise<string | null> {
-  try {
-    const resp = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?format=jsonv2&accept-language=pt-BR&lat=${lat}&lon=${lng}`,
-      { headers: { 'User-Agent': 'NervuraColetora/1.0' } },
-    )
-    if (!resp.ok) return null
-    const j = await resp.json()
-    const a = j?.address
-    if (!a) return null
-    const mun = a.city || a.town || a.village || a.municipality || a.suburb
-    const uf = a.state || a.region
-    return [mun, uf].filter(Boolean).join(' – ')
-  } catch {
-    return null
-  }
-}
-
-/** carrega o mapa de Gênero→Família da pasta public */
-let GENUS_CACHE: Record<string, string> | null = null
-async function loadGenus(): Promise<Record<string, string>> {
-  if (GENUS_CACHE) return GENUS_CACHE
-  try {
-    const r = await fetch('/genus2family.json')
-    const j = (await r.json()) as Record<string, string>
-    GENUS_CACHE = Object.fromEntries(Object.entries(j).map(([g, f]) => [g.toLowerCase(), f]))
-    return GENUS_CACHE
-  } catch {
-    GENUS_CACHE = {}
-    return {}
-  }
-}
-
-/** ----------------- Componente ----------------- */
-export default function App() {
-  const [mode, setMode] = useState<Mode>('coleta')
-  const [tab, setTab] = useState<ColetaTab>('id')
-  const [regTab, setRegTab] = useState<RegTab>('list')
-
-  const headerRef = useRef<HTMLElement | null>(null)
-  function measureHeader() {
-    const h = headerRef.current?.getBoundingClientRect().height ?? 64
-    document.documentElement.style.setProperty('--hdr', `${Math.ceil(h)}px`)
-  }
+// --------- hook: corrigir “mapa quebrado” quando container aparece
+const UseFixSize: React.FC<{ deps: any[] }> = ({ deps }) => {
+  const map = useMap()
   useEffect(() => {
-    measureHeader()
-    const onResize = () => measureHeader()
-    window.addEventListener('resize', onResize)
-    const id = setInterval(measureHeader, 500)
-    return () => {
-      window.removeEventListener('resize', onResize)
-      clearInterval(id)
-    }
-  }, [])
-  useEffect(() => {
-    measureHeader()
-    pingResize()
-  }, [mode, tab, regTab])
+    setTimeout(() => map.invalidateSize(), 60)
+  }, deps) // eslint-disable-line
+  return null
+}
 
-  // estado de coleta
-  const [center, setCenter] = useState<LatLng>(BR_CENTER)
-  const [marker, setMarker] = useState<LatLng | null>(null)
-  const [photos, setPhotos] = useState<PhotoRef[]>([])
-  const [firstCandidate, setFirstCandidate] = useState<{ url: string; file: File } | null>(null)
+// --------- helpers
+const toCapPath = (uri: string) => Capacitor.convertFileSrc ? Capacitor.convertFileSrc(uri) : uri
 
-  const [commonName, setCommon] = useState('')
-  const [scientificName, setScientific] = useState('')
-  const [family, setFamily] = useState('')
-  const [morph, setMorph] = useState<Morphology>({})
-  const [firstISO, setFirstISO] = useState<string | undefined>(undefined)
+const guessFamily = (scientific?: string): string | undefined => {
+  if (!scientific) return undefined
+  const genus = scientific.trim().split(/\s+/)[0]?.toLowerCase()
+  if (!genus) return undefined
+  // @ts-ignore – arquivo JSON é um dicionário {genus: family}
+  const fam = (genus2family as Record<string, string>)[genus]
+  return fam || undefined
+}
 
-  // registros
-  const [all, setAll] = useState<TreeRecord[]>([])
-  const [filterFamily, setFilterFamily] = useState<string>('')
-  const [filterLife, setFilterLife] = useState<LifeForm | ''>('')
-  const [filterHasPhoto, setFilterHasPhoto] = useState<boolean>(false)
-  const [filterText, setFilterText] = useState<string>('')
-  const [dateFrom, setDateFrom] = useState<string>('')
-  const [dateTo, setDateTo] = useState<string>('')
-  const [focus, setFocus] = useState<LatLng | null>(null)
-  const [openRecord, setOpenRecord] = useState<TreeRecord | null>(null)
+const fmt = (n?: number) => (typeof n === 'number' ? n.toFixed(6) : '')
 
-  // export
-  const [exportOpen, setExportOpen] = useState(false)
-  const [exportSel, setExportSel] = useState({ json: true, geojson: true, csv: true, gpx: false, xlsx: true })
-
-  // ui
-  const [toast, setToast] = useState<string | null>(null)
-  const isNative = useMemo(() => (Capacitor.getPlatform?.() ?? 'web') !== 'web', [])
-
-  function toastMsg(t: string) {
-    setToast(t)
-    setTimeout(() => setToast(null), 1800)
+const ensureBlobUrl = async (p: PhotoRef): Promise<string | undefined> => {
+  if (p.blobUrl) return p.blobUrl
+  if (p.uri && p.uri.startsWith('file://')) {
+    return toCapPath(p.uri)
   }
+  return p.uri
+}
 
-  /** GPS inicial + watch */
-  useEffect(() => {
-    ;(async () => {
-      try {
-        const asked = localStorage.getItem('geoAsked')
-        if (!asked) {
-          await Geolocation.requestPermissions()
-          localStorage.setItem('geoAsked', '1')
-        }
-        const current = await Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 6000 })
-        const here = { lat: current.coords.latitude, lng: current.coords.longitude }
-        setCenter(here)
-        setMarker(here)
-      } catch {
-        setCenter(UFRRJ)
-        setMarker(UFRRJ)
+// ------- exportadores
+const toCSV = (rows: any[]) => {
+  if (!rows.length) return ''
+  const headers = Object.keys(rows[0])
+  const escape = (v: any) =>
+    v == null ? '' : `"${String(v).replace(/"/g, '""')}"`
+  const lines = [headers.join(',')]
+  for (const r of rows) lines.push(headers.map(h => escape(r[h])).join(','))
+  return lines.join('\n')
+}
+
+const toGeoJSON = (records: TreeRecord) => {
+  // não usado — exporta lista abaixo
+  return {}
+}
+
+const toGeoJSONList = (recs: TreeRecord[]) => ({
+  type: 'FeatureCollection',
+  features: recs
+    .filter(r => typeof r.lat === 'number' && typeof r.lng === 'number')
+    .map(r => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [r.lng, r.lat] },
+      properties: {
+        id: r.id,
+        popular: r.popular,
+        scientific: r.scientific,
+        family: r.family,
+        dateISO: r.dateISO,
+        lifeForm: r.morphology?.lifeForm,
+        notes: r.notes
       }
-      try {
-        await Geolocation.watchPosition({ enableHighAccuracy: true, maximumAge: 5000 }, (pos) => {
-          if (pos && pos.coords) {
-            const here = { lat: pos.coords.latitude, lng: pos.coords.longitude }
-            setCenter((prev) => prev ?? here)
-          }
-        })
-      } catch {}
+    }))
+})
+
+const downloadBlob = async (name: string, data: Blob | string, mime: string) => {
+  if (Capacitor.getPlatform() === 'android') {
+    // salva arquivo na pasta de dados do app e abre share sheet
+    const content = data instanceof Blob ? await data.text() : data
+    await Filesystem.writeFile({
+      path: `exports/${name}`,
+      data: content,
+      directory: Directory.Documents,
+      encoding: Encoding.UTF8,
+      recursive: true
+    })
+    const uri = (await Filesystem.getUri({ path: `exports/${name}`, directory: Directory.Documents })).uri
+    await Share.share({ title: name, text: `Exportado por NervuraColetora: ${name}`, url: uri })
+  } else {
+    const a = document.createElement('a')
+    const href =
+      data instanceof Blob ? URL.createObjectURL(data) :
+      `data:${mime};charset=utf-8,` + encodeURIComponent(data)
+    a.href = href
+    a.download = name
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    if (data instanceof Blob) URL.revokeObjectURL(href)
+  }
+}
+
+// --------- Componente principal
+const App: React.FC = () => {
+  // UI
+  const [tabCollect, setTabCollect] = useState<'identidade'|'mapa'|'morfologia'|'fotos'>('identidade')
+  const [tabRecords, setTabRecords] = useState<'lista'|'mapa'|'exportar'>('lista')
+  const [fixKeyCollectMap, setFixKeyCollectMap] = useState(0)
+  const [fixKeyRecordsMap, setFixKeyRecordsMap] = useState(0)
+
+  // Coleta
+  const [popular, setPopular] = useState<string>('')
+  const [scientific, setScientific] = useState<string>('')
+  const [family, setFamily] = useState<string>('')
+  const [notes, setNotes] = useState<string>('')
+
+  const [morph, setMorph] = useState<Morphology>({})
+  const [lat, setLat] = useState<number | undefined>()
+  const [lng, setLng] = useState<number | undefined>()
+  const [photos, setPhotos] = useState<PhotoRef[]>([])
+  const [dateISO, setDateISO] = useState<string | undefined>()
+
+  // Registros
+  const [saved, setSaved] = useState<TreeRecord[]>([])
+  const [filterFamily, setFilterFamily] = useState<string>('Todas')
+  const [filterLife, setFilterLife] = useState<LifeForm | 'Todas'>('Todas')
+  const [q, setQ] = useState('')
+
+  // carregar registros
+  useEffect(() => {
+    (async () => {
+      const all = await loadAll()
+      setSaved(all)
     })()
   }, [])
 
-  /** carregar registros */
+  // GPS inicial
   useEffect(() => {
-    loadAll().then((r) => setAll(r ?? []))
+    (async () => {
+      try {
+        const perm = await Geolocation.requestPermissions()
+        const pos = await Geolocation.getCurrentPosition()
+        setLat(pos.coords.latitude)
+        setLng(pos.coords.longitude)
+      } catch {
+        // fallback UFRRJ Seropédica
+        setLat(-22.7603)
+        setLng(-43.6804)
+      }
+    })()
   }, [])
 
-  /** ------------- Fotos ------------- */
-  async function confirmFirstPhoto() {
-    if (!firstCandidate) return
-    const { file, url } = firstCandidate
-    setPhotos((p) => [{ url, name: file.name, caption: '' }, ...p])
-    const gps = await extractGpsFromFile(file)
-    if (gps) {
-      setCenter(gps)
-      setMarker(gps)
-    }
-    const dt = await extractDateFromFile(file)
-    if (dt) setFirstISO(dt.toISOString())
-    setFirstCandidate(null)
-    toastMsg('📍 Posição atualizada (EXIF)')
-    pingResize()
-  }
-  function onGallery(files: File[]) {
-    if (!files?.length) return
-    if (!photos.length && !firstCandidate) {
-      const [first, ...rest] = files
-      setFirstCandidate({ url: URL.createObjectURL(first), file: first })
-      if (rest.length)
-        setPhotos((prev) => [...rest.map((f) => ({ url: URL.createObjectURL(f), name: f.name, caption: '' })), ...prev])
-    } else {
-      setPhotos((prev) => [
-        ...files.map((f) => ({ url: URL.createObjectURL(f), name: f.name, caption: '' })),
-        ...prev,
-      ])
-    }
-    toastMsg('🖼️ Foto(s) adicionada(s)')
-    pingResize()
-  }
-  async function onCamera(file: File) {
-    setFirstCandidate({ url: URL.createObjectURL(file), file })
-    toastMsg('📸 Confirme para aplicar EXIF/GPS')
-    pingResize()
-  }
-
-  /** ------------- Auto-família por gênero ------------- */
+  // família sugerida
   useEffect(() => {
-    const id = setTimeout(async () => {
-      const gen = (scientificName || '').trim().split(/\s+/)[0]?.toLowerCase()
-      if (!gen) return
-      if (family) return // usuário já preencheu manualmente
-      const map = await loadGenus()
-      const fam = map[gen]
-      if (fam) setFamily(fam)
-    }, 300)
-    return () => clearTimeout(id)
-  }, [scientificName])
+    const fam = guessFamily(scientific)
+    if (fam && !family) setFamily(fam)
+  }, [scientific]) // eslint-disable-line
 
-  /** ------------- Salvar / Reset / Editar / Excluir ------------- */
-  function resetForm() {
-    setPhotos([])
-    setFirstCandidate(null)
-    setCommon('')
-    setScientific('')
-    setFamily('')
-    setMorph({})
-    setFirstISO(undefined)
-    setMarker(center)
+  // abas -> corrigir mapa
+  useEffect(() => { setFixKeyCollectMap(k => k + 1) }, [tabCollect])
+  useEffect(() => { setFixKeyRecordsMap(k => k + 1) }, [tabRecords])
+
+  // adicionar fotos (galeria)
+  const onPickFiles = async (files: FileList | null) => {
+    if (!files) return
+    const list: PhotoRef[] = []
+    for (const f of Array.from(files)) {
+      const url = URL.createObjectURL(f)
+      list.push({ id: crypto.randomUUID(), name: f.name, blobUrl: url })
+    }
+    setPhotos(p => [...p, ...list])
   }
 
-  async function saveRecord(editId?: string) {
-    const pos = (marker ?? center)!
-    const now = new Date().toISOString()
+  // salvar registro
+  const saveRecord = async () => {
     const rec: TreeRecord = {
-      id: editId || uuid(),
-      position: pos,
-      commonName: commonName || undefined,
-      scientificName: scientificName || undefined,
-      family: family || undefined,
-      morphology: morph,
-      photos,
-      createdAt: firstISO ?? now,
-      updatedAt: now,
+      id: crypto.randomUUID(),
+      popular, scientific, family,
+      lat, lng, dateISO: dateISO || new Date().toISOString(),
+      notes,
+      morphology: { ...morph },
+      photos
     }
-    if (editId) {
-      const next = all.map((r) => (r.id === editId ? rec : r))
-      await upsertMany(next)
-      setAll(next)
-    } else {
-      await saveOne(rec)
-      const allNow = await loadAll()
-      setAll(allNow)
-    }
-    resetForm()
-    setMode('registros')
-    setRegTab('list')
-    setFocus(rec.position)
-    toastMsg('✅ Registro salvo')
+    await saveOne(rec)
+    setSaved(await loadAll())
+    // limpar form (mantém lat/lng)
+    setPopular(''); setScientific(''); setFamily(''); setNotes(''); setMorph({}); setPhotos([]); setDateISO(undefined)
+    setTabCollect('identidade')
   }
 
-  async function startEdit(r: TreeRecord) {
-    setMode('coleta')
-    setTab('id')
-    setCommon(r.commonName || '')
-    setScientific(r.scientificName || '')
-    setFamily(r.family || '')
-    setMorph(r.morphology || {})
-    setPhotos(r.photos || [])
-    setFirstISO(r.createdAt)
-    setMarker(r.position)
-    // salvar usará o id antigo
-    ;(saveRecord as any)._editing = r.id
+  // excluir registro
+  const delRecord = async (id: string) => {
+    await removeOne(id)
+    setSaved(await loadAll())
   }
 
-  async function deleteRecord(r: TreeRecord) {
-    await removeOne(r.id)
-    const allNow = await loadAll()
-    setAll(allNow)
-    setOpenRecord(null)
-    toastMsg('Registro removido')
-  }
-
-  /** ------------- Exportação ------------- */
-  function scoped(): TreeRecord[] {
-    let rs = [...all]
-    if (filterFamily) rs = rs.filter((r) => r.family === filterFamily)
-    if (filterLife) rs = rs.filter((r) => (r.morphology?.formaVida as any) === filterLife)
-    if (filterHasPhoto) rs = rs.filter((r) => (r.photos?.length ?? 0) > 0)
-    if (filterText) {
-      const t = filterText.toLowerCase()
-      rs = rs.filter(
-        (r) =>
-          (r.commonName || '').toLowerCase().includes(t) ||
-          (r.scientificName || '').toLowerCase().includes(t) ||
-          (r.family || '').toLowerCase().includes(t),
-      )
-    }
-    if (dateFrom) rs = rs.filter((r) => r.createdAt >= dateFrom)
-    if (dateTo) rs = rs.filter((r) => r.createdAt <= dateTo + 'T23:59:59')
-    return rs
-  }
-
-  function makeJSON(rs: TreeRecord[]) {
-    return JSON.stringify(
-      { meta: { app: 'NervuraColetora', exportedAt: new Date().toISOString(), total: rs.length }, records: rs },
-      null,
-      2,
-    )
-  }
-
-  function makeGeoJSON(rs: TreeRecord[]) {
-    const fc = {
-      type: 'FeatureCollection',
-      features: rs.map((r) => ({
-        type: 'Feature',
-        geometry: { type: 'Point', coordinates: [r.position.lng, r.position.lat] },
-        properties: {
-          id: r.id,
-          commonName: r.commonName,
-          scientificName: r.scientificName,
-          family: r.family,
-          morphology: r.morphology,
-          photoCount: r.photos?.length ?? 0,
-          createdAt: r.createdAt,
-          updatedAt: r.updatedAt,
-        },
-      })),
-    }
-    return JSON.stringify(fc, null, 2)
-  }
-
-  function makeCSV(rs: TreeRecord[]) {
-    const head = [
-      'id',
-      'dataISO',
-      'lat',
-      'lng',
-      'nomePopular',
-      'nomeCientifico',
-      'familia',
-      'formaVida',
-      'flores',
-      'frutos',
-      'saude',
-      'folha_tipo',
-      'folha_margem',
-      'folha_filotaxia',
-      'folha_nervacao',
-      'cap_cm',
-      'altura_m',
-      'anotacoes',
-      'fotos',
-    ]
-    const rows = rs.map((r) =>
-      [
-        r.id,
-        r.createdAt,
-        r.position.lat,
-        r.position.lng,
-        q(r.commonName),
-        q(r.scientificName),
-        q(r.family),
-        q(r.morphology?.formaVida as any),
-        q(r.morphology?.flores),
-        q(r.morphology?.frutos),
-        q(r.morphology?.saude),
-        q(r.morphology?.folha_tipo),
-        q(r.morphology?.folha_margem),
-        q(r.morphology?.folha_filotaxia),
-        q(r.morphology?.folha_nervacao),
-        r.morphology?.cap_cm ?? '',
-        r.morphology?.altura_m ?? '',
-        q(r.morphology?.obs),
-        r.photos?.length ?? 0,
-      ].join(','),
-    )
-    return [head.join(','), ...rows].join('\n')
-    function q(v?: any) {
-      if (v == null) return ''
-      const s = String(v)
-      return `"${s.replace(/"/g, '""')}"`
-    }
-  }
-
-  function makeGPX(rs: TreeRecord[]) {
-    const wpts = rs
-      .map(
-        (r) =>
-          `\n  <wpt lat="${r.position.lat}" lon="${r.position.lng}"><name>${xml(
-            r.commonName ?? r.scientificName ?? r.id,
-          )}</name><time>${r.createdAt}</time></wpt>`,
-      )
-      .join('')
-    return `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="NervuraColetora" xmlns="http://www.topografix.com/GPX/1/1">${wpts}\n</gpx>`
-    function xml(s: string) {
-      return s.replace(/[<&>]/g, (m) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[m] as string))
-    }
-  }
-
-  async function makeXLSXBlob(rs: TreeRecord[]) {
-    // @ts-ignore
-    let XLSX: any
+  // compartilhar 1 registro
+  const shareRecord = async (rec: TreeRecord) => {
     try {
-      XLSX = await import('xlsx/xlsx.mjs')
-    } catch {
-      XLSX = await import('xlsx')
+      const lines = [
+        rec.popular ? `Nome popular: ${rec.popular}` : '',
+        rec.scientific ? `Nome científico: ${rec.scientific}` : '',
+        rec.family ? `Família: ${rec.family}` : '',
+        (typeof rec.lat === 'number' && typeof rec.lng === 'number') ? `Local: ${fmt(rec.lat)}, ${fmt(rec.lng)}` : '',
+        rec.dateISO ? `Data: ${rec.dateISO}` : '',
+        rec.morphology?.lifeForm ? `Forma de vida: ${rec.morphology.lifeForm}` : '',
+        rec.notes ? `Anotações: ${rec.notes}` : ''
+      ].filter(Boolean)
+      const text = `Registro botânico (NervuraColetora)\n\n` + lines.join('\n')
+
+      let url: string | undefined
+      const first = rec.photos?.[0]
+      if (first?.uri) url = toCapPath(first.uri)
+      else if (first?.blobUrl) url = first.blobUrl
+
+      await Share.share({
+        title: rec.popular || rec.scientific || 'Registro botânico',
+        text,
+        url
+      })
+    } catch (e) {
+      alert('Não foi possível compartilhar agora.')
     }
-    const rows = rs.map((r) => ({
+  }
+
+  // filtros
+  const filtered = useMemo(() => {
+    let arr = [...saved]
+    if (filterFamily !== 'Todas') arr = arr.filter(r => (r.family || '').toLowerCase() === filterFamily.toLowerCase())
+    if (filterLife !== 'Todas') arr = arr.filter(r => r.morphology?.lifeForm === filterLife)
+    if (q.trim()) {
+      const t = q.toLowerCase()
+      arr = arr.filter(r =>
+        (r.popular || '').toLowerCase().includes(t) ||
+        (r.scientific || '').toLowerCase().includes(t) ||
+        (r.family || '').toLowerCase().includes(t))
+    }
+    return arr
+  }, [saved, filterFamily, filterLife, q])
+
+  // exportar (planilha mínima garantida)
+  const exportXLSX = async () => {
+    const rows = filtered.map(r => ({
       id: r.id,
-      dataISO: r.createdAt,
-      lat: r.position.lat,
-      lng: r.position.lng,
-      nomePopular: r.commonName ?? '',
-      nomeCientifico: r.scientificName ?? '',
-      familia: r.family ?? '',
-      formaVida: (r.morphology?.formaVida as any) ?? '',
-      flores: r.morphology?.flores ?? '',
-      frutos: r.morphology?.frutos ?? '',
-      saude: r.morphology?.saude ?? '',
-      folha_tipo: r.morphology?.folha_tipo ?? '',
-      folha_margem: r.morphology?.folha_margem ?? '',
-      folha_filotaxia: r.morphology?.folha_filotaxia ?? '',
-      folha_nervacao: r.morphology?.folha_nervacao ?? '',
-      cap_cm: r.morphology?.cap_cm ?? '',
-      altura_m: r.morphology?.altura_m ?? '',
-      anotacoes: r.morphology?.obs ?? '',
-      fotos: r.photos?.length ?? 0,
+      popular: r.popular || '',
+      scientific: r.scientific || '',
+      family: r.family || '',
+      lifeForm: r.morphology?.lifeForm || '',
+      lat: r.lat ?? '',
+      lng: r.lng ?? '',
+      dateISO: r.dateISO || '',
+      notes: r.notes || ''
     }))
-    const ws = XLSX.utils.json_to_sheet(rows)
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, 'Registros')
-    const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' })
-    return new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+    const csv = toCSV(rows)
+    // CSV -> XLSX simples via Excel (Excel abre CSV perfeitamente). Se quiser SheetJS depois a gente troca.
+    await downloadBlob(`registros_${new Date().toISOString().slice(0,10)}.csv`, csv, 'text/csv')
   }
 
-  function b64(buf: ArrayBuffer) {
-    let s = ''
-    const b = new Uint8Array(buf)
-    for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i])
-    return btoa(s)
+  const exportJSON = async () => {
+    await downloadBlob('registros.json', JSON.stringify(filtered, null, 2), 'application/json')
   }
 
-  async function doExport() {
-    const rs = scoped()
-    if (!rs.length) {
-      toastMsg('Nada para exportar')
-      return
-    }
-    const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
-    const tasks: { name: string; mime: string; blob: Promise<Blob> }[] = []
-    if (exportSel.json)
-      tasks.push({
-        name: `nervura-${ts}.json`,
-        mime: 'application/json',
-        blob: Promise.resolve(new Blob([makeJSON(rs)], { type: 'application/json' })),
-      })
-    if (exportSel.geojson)
-      tasks.push({
-        name: `nervura-${ts}.geojson`,
-        mime: 'application/geo+json',
-        blob: Promise.resolve(new Blob([makeGeoJSON(rs)], { type: 'application/geo+json' })),
-      })
-    if (exportSel.csv)
-      tasks.push({
-        name: `nervura-${ts}.csv`,
-        mime: 'text/csv',
-        blob: Promise.resolve(new Blob([makeCSV(rs)], { type: 'text/csv' })),
-      })
-    if (exportSel.gpx)
-      tasks.push({
-        name: `nervura-${ts}.gpx`,
-        mime: 'application/gpx+xml',
-        blob: Promise.resolve(new Blob([makeGPX(rs)], { type: 'application/gpx+xml' })),
-      })
-    if (exportSel.xlsx)
-      tasks.push({
-        name: `nervura-${ts}.xlsx`,
-        mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        blob: makeXLSXBlob(rs),
-      })
-
-    if ((Capacitor.getPlatform?.() ?? 'web') === 'web') {
-      for (const t of tasks) {
-        const b = await t.blob
-        const a = document.createElement('a')
-        a.href = URL.createObjectURL(b)
-        a.download = t.name
-        a.click()
-        URL.revokeObjectURL(a.href)
-      }
-      setExportOpen(false)
-      toastMsg('Exportado')
-      return
-    }
-    const fileUris: string[] = []
-    for (const t of tasks) {
-      const b = await t.blob
-      const ab = await b.arrayBuffer()
-      await Filesystem.writeFile({ path: t.name, data: b64(ab), directory: Directory.Cache, encoding: Encoding.BASE64 })
-      const uri = (await Filesystem.getUri({ path: t.name, directory: Directory.Cache })).uri
-      fileUris.push(uri)
-    }
-    try {
-      await Share.share({
-        title: 'Exportar dados — NervuraColetora',
-        text: `Exportados ${rs.length} registro(s).`,
-        files: fileUris,
-        dialogTitle: 'Compartilhar exportações',
-      })
-    } catch {}
-    setExportOpen(false)
-    toastMsg('Exportado')
+  const exportGeoJSON = async () => {
+    const gj = toGeoJSONList(filtered)
+    await downloadBlob('registros.geojson', JSON.stringify(gj), 'application/geo+json')
   }
 
-  /** ------------- Compartilhar um registro ------------- */
-  async function shareRecord(r: TreeRecord) {
-    const where = (await reverseGeocode(r.position.lat, r.position.lng)) || 
-      `${r.position.lat.toFixed(5)}, ${r.position.lng.toFixed(5)}`
-    const texto = [
-      'Registro botânico — NervuraColetora',
-      r.commonName ? `Nome popular: ${r.commonName}` : null,
-      r.scientificName ? `Nome científico: ${r.scientificName}` : null,
-      r.family ? `Família: ${r.family}` : null,
-      `Local: ${where}`,
-      r.createdAt ? `Data/Hora: ${new Date(r.createdAt).toLocaleString()}` : null,
-      r.morphology?.formaVida ? `Forma de vida: ${r.morphology.formaVida}` : null,
-      r.morphology?.flores ? `Flores: ${r.morphology.flores}` : null,
-      r.morphology?.frutos ? `Frutos: ${r.morphology.frutos}` : null,
-      r.morphology?.saude ? `Saúde: ${r.morphology.saude}` : null,
-      r.morphology?.folha_tipo ? `Folha – tipo: ${r.morphology.folha_tipo}` : null,
-      r.morphology?.folha_margem ? `Folha – margem: ${r.morphology.folha_margem}` : null,
-      r.morphology?.folha_filotaxia ? `Folha – filotaxia: ${r.morphology.folha_filotaxia}` : null,
-      r.morphology?.folha_nervacao ? `Folha – nervação: ${r.morphology.folha_nervacao}` : null,
-      r.morphology?.obs ? `Anotações: ${r.morphology.obs}` : null,
-    ]
-      .filter(Boolean)
-      .join('\n')
-
-    if ((Capacitor.getPlatform?.() ?? 'web') === 'web') {
-      await navigator.clipboard?.writeText(texto)
-      toastMsg('Texto copiado — cole no Facebook')
-      return
-    }
-    const files: string[] = []
-    for (let i = 0; i < (r.photos?.length ?? 0); i++) {
-      const p = r.photos![i]
-      try {
-        const blob = await fetch(p.url).then((x) => x.blob())
-        const ab = await blob.arrayBuffer()
-        const name = `registro-${r.id}-${i}.jpg`
-        await Filesystem.writeFile({ path: name, data: b64(ab), directory: Directory.Cache, encoding: Encoding.BASE64 })
-        const uri = (await Filesystem.getUri({ path: name, directory: Directory.Cache })).uri
-        files.push(uri)
-      } catch {}
-    }
-    try {
-      await Share.share({
-        title: r.commonName ?? r.scientificName ?? 'Registro botânico',
-        text: texto,
-        files,
-        dialogTitle: 'Compartilhar registro',
-      })
-    } catch {}
+  const exportCSV = async () => {
+    const rows = filtered.map(r => ({
+      id: r.id,
+      popular: r.popular || '',
+      scientific: r.scientific || '',
+      family: r.family || '',
+      lifeForm: r.morphology?.lifeForm || '',
+      lat: r.lat ?? '',
+      lng: r.lng ?? '',
+      dateISO: r.dateISO || '',
+      notes: r.notes || ''
+    }))
+    await downloadBlob('registros.csv', toCSV(rows), 'text/csv')
   }
 
-  /** ----------------- UI ----------------- */
+  const exportGPX = async () => {
+    const pts = filtered
+      .filter(r => typeof r.lat === 'number' && typeof r.lng === 'number')
+      .map(r => `
+  <wpt lat="${r.lat}" lon="${r.lng}">
+    <name>${(r.popular || r.scientific || r.id).replace(/[&<>]/g, '')}</name>
+    <time>${r.dateISO || ''}</time>
+  </wpt>`).join('\n')
+    const gpx = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="NervuraColetora" xmlns="http://www.topografix.com/GPX/1/1">
+${pts}
+</gpx>`
+    await downloadBlob('registros.gpx', gpx, 'application/gpx+xml')
+  }
+
+  // ------- UI básicos
+  const Section: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
+    <div style={{
+      background: '#111', border: '1px solid #222', borderRadius: 16, padding: 16, margin: '16px 0',
+      boxShadow: '0 0 0 1px #1f2937 inset'
+    }}>
+      <h2 style={{color:'#EAD8B1', fontSize:18, margin:'0 0 12px'}}>{title}</h2>
+      {children}
+    </div>
+  )
+
+  const TabBar: React.FC<{ items: {key:string; label:string}[], value:string, onChange:(k:any)=>void }> =
+  ({ items, value, onChange }) => (
+    <div style={{
+      display:'flex', gap:8, overflowX:'auto', padding:'8px 0', position:'sticky', top:56, background:'#0B0B0B', zIndex:10
+    }}>
+      {items.map(it => (
+        <button key={it.key}
+          onClick={() => onChange(it.key)}
+          style={{
+            whiteSpace:'nowrap',
+            padding:'8px 12px',
+            borderRadius:20,
+            border:'1px solid #1f2937',
+            background: value===it.key ? '#14532d' : '#111',
+            color:'#e5e7eb'
+          }}>
+          {it.label}
+        </button>
+      ))}
+    </div>
+  )
+
+  // ------- componentes de mapa
+  const CollectMap: React.FC = () => {
+    const position: LatLngExpression = [lat ?? 0, lng ?? 0]
+    return (
+      <div style={{borderRadius:16, overflow:'hidden', border:'1px solid #222'}}>
+        <MapContainer key={fixKeyCollectMap} center={position} zoom={17} style={{height:320}}>
+          <UseFixSize deps={[fixKeyCollectMap]}/>
+          <TileLayer
+            attribution='&copy; OpenStreetMap'
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          />
+          {typeof lat === 'number' && typeof lng === 'number' &&
+            <Marker
+              position={[lat, lng]}
+              draggable
+              icon={lifeIcon(morph.lifeForm)}
+              eventHandlers={{
+                dragend: (e) => {
+                  const p = (e.target as any).getLatLng()
+                  setLat(p.lat); setLng(p.lng)
+                }
+              }}
+            >
+              <Popup>Marcador: {fmt(lat)}, {fmt(lng)}</Popup>
+            </Marker>}
+        </MapContainer>
+      </div>
+    )
+  }
+
+  const RecordsMap: React.FC = () => {
+    const first = filtered.find(r => typeof r.lat === 'number' && typeof r.lng === 'number')
+    const center: LatLngExpression = first ? [first.lat!, first.lng!] : [(lat ?? -22.7603), (lng ?? -43.6804)]
+    return (
+      <div style={{borderRadius:16, overflow:'hidden', border:'1px solid #222'}}>
+        <MapContainer key={fixKeyRecordsMap} center={center} zoom={13} style={{height:360}}>
+          <UseFixSize deps={[fixKeyRecordsMap, filtered.length]}/>
+          <TileLayer
+            attribution='&copy; OpenStreetMap'
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          />
+          {filtered.map(r => (typeof r.lat==='number' && typeof r.lng==='number') && (
+            <Marker key={r.id} position={[r.lat, r.lng]} icon={lifeIcon(r.morphology?.lifeForm)}>
+              <Popup>
+                <div style={{minWidth:160}}>
+                  <div style={{fontWeight:700}}>{r.popular || r.scientific || 'Registro'}</div>
+                  {r.scientific && <div style={{fontStyle:'italic'}}>{r.scientific}</div>}
+                  {r.family && <div>Família: {r.family}</div>}
+                  {(r.lat!=null && r.lng!=null) && <div>{fmt(r.lat)}, {fmt(r.lng)}</div>}
+                </div>
+              </Popup>
+            </Marker>
+          ))}
+        </MapContainer>
+      </div>
+    )
+  }
+
   return (
-    <div className="app-root app-shell">
-      <header className="app-header" ref={headerRef as any}>
-        <div className="topbar">
-          <Brand />
-          <div className="tabs">
-            <button className={mode === 'coleta' ? 'tab active' : 'tab'} onClick={() => setMode('coleta')}>
-              Coletar
-            </button>
-            <button className={mode === 'registros' ? 'tab active' : 'tab'} onClick={() => setMode('registros')}>
-              Registros
-            </button>
-          </div>
-        </div>
-        {mode === 'coleta' && (
-          <div className="subtabs">
-            {(['id', 'map', 'morph', 'photos'] as ColetaTab[]).map((t) => (
-              <button key={t} className={tab === t ? 'chip active' : 'chip'} onClick={() => { setTab(t); pingResize() }}>
-                {t === 'id' ? 'Identificação' : t === 'map' ? 'Mapa' : t === 'morph' ? 'Morfologia' : 'Fotos'}
-              </button>
-            ))}
-          </div>
-        )}
-        {mode === 'registros' && (
-          <div className="subtabs">
-            {(['list', 'map'] as RegTab[]).map((t) => (
-              <button key={t} className={regTab === t ? 'chip active' : 'chip'} onClick={() => { setRegTab(t); pingResize() }}>
-                {t === 'list' ? 'Lista / Exportar' : 'Mapa'}
-              </button>
-            ))}
-          </div>
-        )}
-      </header>
+    <div style={{background:'#0B0B0B', minHeight:'100vh', color:'#e5e7eb'}}>
+      {/* topo */}
+      <div style={{
+        position:'sticky', top:0, zIndex:20, background:'#0B0B0B',
+        display:'flex', alignItems:'center', gap:12, padding:'10px 14px', borderBottom:'1px solid #1f2937'
+      }}>
+        <img src="/brand.png" width={30} height={30} style={{borderRadius:6}}/>
+        <div style={{fontWeight:800}}>NervuraColetora</div>
+        <div style={{flex:1}}/>
+        <button onClick={()=>setTabCollect('identidade')}
+          style={{padding:'6px 12px', borderRadius:16, border:'1px solid #1f2937', background:'#14532d', color:'#fff'}}>Coletar</button>
+        <button onClick={()=>setTabRecords('lista')}
+          style={{padding:'6px 12px', borderRadius:16, border:'1px solid #1f2937', background:'#0f172a', color:'#fff'}}>Registros</button>
+      </div>
 
-      {mode === 'coleta' ? (
-        <main className="content app-content">
-          {tab === 'id' && (
-            <>
-              <Section title="Identificação">
-                <div className="form-grid">
-                  <div className="form-field">
-                    <label>Nome popular</label>
-                    <input value={commonName} onChange={(e) => setCommon(e.target.value)} placeholder="ex.: Ipê-amarelo" />
-                  </div>
-                  <div className="form-field">
-                    <label>Nome científico</label>
-                    <input
-                      value={scientificName}
-                      onChange={(e) => setScientific(e.target.value)}
-                      placeholder="ex.: Handroanthus albus"
-                      autoCapitalize="none"
-                    />
-                  </div>
-                  <div className="form-field">
-                    <label>Família (auto)</label>
-                    <input value={family} onChange={(e) => setFamily(e.target.value)} placeholder="ex.: Bignoniaceae" />
-                  </div>
-                </div>
-              </Section>
+      <div style={{padding:'12px 14px 90px'}}>
+        {/* COLHER */}
+        <Section title="Coleta">
+          <TabBar
+            items={[
+              {key:'identidade', label:'Identidade'},
+              {key:'mapa', label:'Mapa'},
+              {key:'morfologia', label:'Morfologia'},
+              {key:'fotos', label:'Fotos'},
+            ]}
+            value={tabCollect}
+            onChange={setTabCollect}
+          />
 
-              <Section title="Fotos">
-                <div className="row gap">
-                  <PhotoPicker onCamera={onCamera} onGallery={onGallery} />
-                </div>
-                <small className="hint">Dica: use a câmera para capturar EXIF/GPS quando disponível.</small>
-                {firstCandidate && (
-                  <div className="confirm-first">
-                    <img src={firstCandidate.url} className="thumb-first" />
-                    <div className="row">
-                      <button className="btn gold" onClick={confirmFirstPhoto}>
-                        Confirmar 1ª foto (aplicar EXIF/GPS)
-                      </button>
-                      <button className="btn ghost" onClick={() => setFirstCandidate(null)}>
-                        Descartar
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </Section>
-            </>
-          )}
+          {tabCollect==='identidade' &&
+            <div style={{display:'grid', gap:12}}>
+              <label>Nome popular
+                <input value={popular} onChange={e=>setPopular(e.target.value)}
+                  placeholder="ex.: ipê-amarelo"
+                  style={{width:'100%', marginTop:6}}/>
+              </label>
+              <label>Nome científico
+                <input value={scientific} onChange={e=>setScientific(e.target.value)}
+                  placeholder="ex.: Handroanthus albus"
+                  style={{width:'100%', marginTop:6}}/>
+              </label>
+              <label>Família (auto)
+                <input value={family} onChange={e=>setFamily(e.target.value)}
+                  placeholder="ex.: Bignoniaceae"
+                  style={{width:'100%', marginTop:6}}/>
+              </label>
+              <label>Observações
+                <textarea value={notes} onChange={e=>setNotes(e.target.value)}
+                  placeholder="Anotações adicionais" style={{width:'100%', marginTop:6}}/>
+              </label>
+            </div>}
 
-          {tab === 'map' && (
-            <Section title="Posição no mapa (toque para mover / arraste o marcador)">
-              <div className="map-frame" style={{ height: 300 }}>
-                <MapView
-                  center={center}
-                  marker={marker ?? center}
-                  lifeForm={morph.formaVida as LifeForm}
-                  onMoveMarker={(pos) => setMarker(pos)}
-                  height={300}
-                />
-              </div>
-              <div className="meta" style={{ marginTop: 8 }}>
-                Marcador: {lifeFormEmoji(morph.formaVida as LifeForm)} · {marker?.lat.toFixed(5)},{' '}
-                {marker?.lng.toFixed(5)}
-              </div>
-            </Section>
-          )}
+          {tabCollect==='mapa' && <div>
+            <div style={{marginBottom:8, color:'#cbd5e1'}}>Posição no mapa (toque/arraste o marcador)</div>
+            <CollectMap/>
+            <div style={{marginTop:8}}>Marcador: {fmt(lat)}, {fmt(lng)}</div>
+          </div>}
 
-          {tab === 'morph' && (
-            <Section title="Características morfológicas">
-              <MorphologyForm value={morph} onChange={setMorph} />
-            </Section>
-          )}
+          {tabCollect==='morfologia' &&
+            <div style={{display:'grid', gap:12}}>
+              <label>Forma de vida
+                <select value={morph.lifeForm || ''} onChange={e=>setMorph(m => ({...m, lifeForm: (e.target.value || undefined) as any}))}
+                  style={{width:'100%', marginTop:6}}>
+                  <option value=""></option>
+                  {['árvore','arbusto','erva','cipó','epífita','palmeira','outra'].map(v=><option key={v} value={v}>{v}</option>)}
+                </select>
+              </label>
+              <label>Flores
+                <input value={morph.flowers || ''} onChange={e=>setMorph(m=>({...m, flowers:e.target.value}))}
+                  placeholder="Descrição/cor/estágio" style={{width:'100%', marginTop:6}}/>
+              </label>
+              <label>Frutos
+                <input value={morph.fruits || ''} onChange={e=>setMorph(m=>({...m, fruits:e.target.value}))}
+                  placeholder="Descrição/estágio" style={{width:'100%', marginTop:6}}/>
+              </label>
+              <label>Saúde
+                <input value={morph.health || ''} onChange={e=>setMorph(m=>({...m, health:e.target.value}))}
+                  placeholder="sadio/lesões/pragas" style={{width:'100%', marginTop:6}}/>
+              </label>
+              <label>CAP (cm)
+                <input type="number" value={morph.capCm as any || ''} onChange={e=>setMorph(m=>({...m, capCm: e.target.value ? Number(e.target.value) : ''}))}
+                  placeholder="ex.: 45" style={{width:'100%', marginTop:6}}/>
+              </label>
+              <label>Altura (m)
+                <input type="number" value={morph.heightM as any || ''} onChange={e=>setMorph(m=>({...m, heightM: e.target.value ? Number(e.target.value) : ''}))}
+                  placeholder="ex.: 8" style={{width:'100%', marginTop:6}}/>
+              </label>
+            </div>
+          }
 
-          {tab === 'photos' && (
-            <>
-              <Section title="Fotos do indivíduo">
-                <Gallery photos={photos} onChange={setPhotos} />
-              </Section>
-              <div className="footer-actions actions">
-                <button
-                  className="btn primary"
-                  onClick={() => saveRecord((saveRecord as any)._editing ? (saveRecord as any)._editing : undefined)}
-                >
-                  Salvar registro
-                </button>
-                <button
-                  className="btn warn"
-                  onClick={async () => {
-                    await wipeAll()
-                    setAll([])
-                    toastMsg('Tudo apagado')
-                  }}
-                >
-                  Apagar tudo
-                </button>
-              </div>
-            </>
-          )}
-        </main>
-      ) : (
-        <main className="content app-content">
-          {regTab === 'list' && (
-            <Section title="Registros">
-              <div className="grid-2 gap">
-                <div className="form-field">
-                  <label>Família</label>
-                  <select value={filterFamily} onChange={(e) => setFilterFamily(e.target.value)}>
-                    <option value="">Todas</option>
-                    {Array.from(new Set(all.map((r) => r.family).filter(Boolean) as string[])).map((f) => (
-                      <option key={f} value={f}>
-                        {f}
-                      </option>
-                    ))}
+          {tabCollect==='fotos' &&
+            <div>
+              <input type="file" multiple accept="image/*" onChange={e=>onPickFiles(e.target.files)} />
+              <div style={{display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:8, marginTop:12}}>
+                {photos.length===0 && <div style={{opacity:.7}}>Nenhuma foto adicionada.</div>}
+                {photos.map(p=><div key={p.id} style={{border:'1px solid #222', borderRadius:8, padding:6}}>
+                  <img src={p.blobUrl || (p.uri ? toCapPath(p.uri) : undefined)} style={{width:'100%', height:92, objectFit:'cover', borderRadius:6}}/>
+                  <select value={p.caption || ''} onChange={e=>setPhotos(list => list.map(x => x.id===p.id ? {...x, caption: e.target.value} : x))}
+                    style={{width:'100%', marginTop:6}}>
+                    <option value="">(legenda)</option>
+                    <option value="hábito">hábito</option>
+                    <option value="folha">folha</option>
+                    <option value="flor">flor</option>
+                    <option value="fruto">fruto</option>
+                    <option value="casca">casca</option>
+                    <option value="outra">outra</option>
                   </select>
-                </div>
-                <div className="form-field">
-                  <label>Forma de vida</label>
-                  <select value={filterLife} onChange={(e) => setFilterLife(e.target.value as any)}>
-                    <option value="">Todas</option>
-                    {['árvore', 'arbusto', 'erva', 'cipó', 'epífita', 'palmeira'].map((lf) => (
-                      <option value={lf} key={lf}>
-                        {lf}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="form-field">
-                  <label>De</label>
-                  <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-                </div>
-                <div className="form-field">
-                  <label>Até</label>
-                  <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
-                </div>
-                <label className="check" style={{ alignSelf: 'end' }}>
-                  <input type="checkbox" checked={filterHasPhoto} onChange={(e) => setFilterHasPhoto(e.target.checked)} />
-                  <span>Somente com foto</span>
+                </div>)}
+              </div>
+            </div>
+          }
+
+          <div style={{display:'flex', gap:12, marginTop:16, flexWrap:'wrap'}}>
+            <button onClick={saveRecord} style={{background:'#14532d', color:'#fff', padding:'10px 14px', borderRadius:10, border:'1px solid #1f2937'}}>Salvar registro</button>
+            <button onClick={async ()=>{ await wipeAll(); setSaved([]) }} style={{background:'#7f1d1d', color:'#fff', padding:'10px 14px', borderRadius:10, border:'1px solid #1f2937'}}>Apagar tudo</button>
+          </div>
+        </Section>
+
+        {/* REGISTROS */}
+        <Section title="Registros">
+          <TabBar
+            items={[
+              {key:'lista', label:'Lista'},
+              {key:'mapa', label:'Mapa'},
+              {key:'exportar', label:'Exportar'},
+            ]}
+            value={tabRecords}
+            onChange={setTabRecords}
+          />
+
+          {tabRecords==='lista' &&
+            <div style={{display:'grid', gap:12}}>
+              <div style={{display:'grid', gap:8}}>
+                <label>Família
+                  <input value={filterFamily==='Todas' ? '' : filterFamily} onChange={e=>setFilterFamily(e.target.value || 'Todas')} placeholder="Todas" style={{width:'100%', marginTop:6}}/>
                 </label>
-                <div className="form-field">
-                  <label>Buscar</label>
-                  <input placeholder="popular/científico/família" value={filterText} onChange={(e) => setFilterText(e.target.value)} />
-                </div>
+                <label>Forma de vida
+                  <select value={filterLife} onChange={e=>setFilterLife(e.target.value as any)} style={{width:'100%', marginTop:6}}>
+                    {['Todas','árvore','arbusto','erva','cipó','epífita','palmeira','outra'].map(v=><option key={v} value={v}>{v}</option>)}
+                  </select>
+                </label>
+                <label>Buscar
+                  <input value={q} onChange={e=>setQ(e.target.value)} placeholder="popular/científico/família" style={{width:'100%', marginTop:6}}/>
+                </label>
               </div>
 
-              <div className="export-box" style={{ marginTop: 12 }}>
-                <button className="btn" onClick={() => setExportOpen((v) => !v)}>
-                  Exportar ▾
-                </button>
-                {exportOpen && (
-                  <div className="export-panel">
-                    {(
-                      [
-                        ['json', 'JSON'],
-                        ['geojson', 'GeoJSON'],
-                        ['csv', 'CSV'],
-                        ['gpx', 'GPX'],
-                        ['xlsx', 'XLSX'],
-                      ] as const
-                    ).map(([k, label]) => (
-                      <label key={k} className="check">
-                        <input
-                          type="checkbox"
-                          checked={(exportSel as any)[k]}
-                          onChange={() => setExportSel((o) => ({ ...o, [k]: !(o as any)[k] }))}
-                        />
-                        <span>{label}</span>
-                      </label>
-                    ))}
-                    <button className="btn gold small" onClick={doExport}>
-                      Gerar & compartilhar
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              <div className="list" style={{ marginTop: 12 }}>
-                {scoped().map((r) => (
-                  <div key={r.id} className="list-item row space">
-                    <div onClick={() => { setOpenRecord(r); setFocus(r.position) }}>
-                      <div className="title">
-                        {lifeFormEmoji(r.morphology?.formaVida as any)} {r.commonName || r.scientificName || r.id}
-                      </div>
-                      <div className="subtitle">
-                        <i>{r.scientificName || '—'}</i> · {r.family || '—'}
-                      </div>
-                      <div className="meta">
-                        {r.position.lat.toFixed(5)}, {r.position.lng.toFixed(5)} · {new Date(r.createdAt).toLocaleString()}
-                      </div>
+              <div style={{display:'grid', gap:12}}>
+                {filtered.map(r => (
+                  <div key={r.id} style={{border:'1px solid #222', borderRadius:12, padding:12}}>
+                    <div style={{display:'flex', alignItems:'center', gap:8}}>
+                      <span style={{fontSize:20}}>{r.morphology?.lifeForm ? (lifeIcon(r.morphology.lifeForm) && '🌿') : '📍'}</span>
+                      <div style={{fontWeight:700}}>{r.popular || r.scientific || '(sem nome)'}</div>
+                      <div style={{flex:1}} />
+                      <button onClick={()=>shareRecord(r)} style={{background:'#14532d', color:'#fff', padding:'6px 10px', borderRadius:8, border:'1px solid #1f2937'}}>Compartilhar</button>
+                      <button onClick={()=>delRecord(r.id)} style={{background:'#7f1d1d', color:'#fff', padding:'6px 10px', borderRadius:8, border:'1px solid #1f2937'}}>Excluir</button>
                     </div>
-                    <div className="row gap">
-                      <button className="btn small" onClick={() => shareRecord(r)}>Compartilhar</button>
-                      <button className="btn small ghost" onClick={() => startEdit(r)}>Editar</button>
-                      <button className="btn small warn" onClick={() => deleteRecord(r)}>Excluir</button>
+                    <div style={{opacity:.8}}>
+                      {r.scientific && <div style={{fontStyle:'italic'}}>{r.scientific}</div>}
+                      {r.family && <div>Família: {r.family}</div>}
+                      {(r.lat!=null && r.lng!=null) && <div>Local: {fmt(r.lat)}, {fmt(r.lng)}</div>}
+                      {r.dateISO && <div>Data: {r.dateISO}</div>}
                     </div>
+                    {r.photos?.length ? (
+                      <div style={{display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:8, marginTop:8}}>
+                        {r.photos.map(p => <img key={p.id} src={p.blobUrl || (p.uri ? toCapPath(p.uri) : undefined)} style={{width:'100%', height:90, objectFit:'cover', borderRadius:6}}/>)}
+                      </div>
+                    ) : <div style={{opacity:.6, marginTop:6}}>Sem fotos.</div>}
                   </div>
                 ))}
-                {!scoped().length && <div className="empty">Nenhum registro no filtro atual.</div>}
-              </div>
-            </Section>
-          )}
-
-          {regTab === 'map' && (
-            <Section title="Mapa de registros">
-              <div className="map-frame" style={{ height: 360 }}>
-                <RecordsMap
-                  records={scoped()}
-                  center={focus ?? (scoped()[0]?.position || center)}
-                  focus={focus}
-                  onOpenRecord={(r) => { setOpenRecord(r); setFocus(r.position) }}
-                  height={360}
-                />
-              </div>
-              <div className="row" style={{ marginTop: 8 }}>
-                <button className="btn" onClick={() => setOpenRecord(null)}>Fechar detalhes</button>
-                <button className="btn ghost" onClick={() => { pingResize(); }}>
-                  Atualizar exibição
-                </button>
-              </div>
-            </Section>
-          )}
-        </main>
-      )}
-
-      {openRecord && (
-        <div className="modal" onClick={() => setOpenRecord(null)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-head">
-              <div>
-                <div className="title">
-                  {lifeFormEmoji(openRecord.morphology?.formaVida as any)} {openRecord.commonName || '—'}
-                </div>
-                <div className="subtitle">
-                  <i>{openRecord.scientificName || '—'}</i>
-                </div>
-                {openRecord.family && <div className="meta">Família: {openRecord.family}</div>}
-                <div className="meta">
-                  Local: {openRecord.position.lat.toFixed(6)}, {openRecord.position.lng.toFixed(6)}
-                </div>
-                <div className="meta">Data: {new Date(openRecord.createdAt).toLocaleString()}</div>
-              </div>
-              <div className="row gap">
-                <button className="btn" onClick={() => shareRecord(openRecord)}>Compartilhar</button>
-                <button className="btn ghost" onClick={() => setOpenRecord(null)}>Fechar</button>
+                {filtered.length===0 && <div style={{opacity:.7}}>Nenhum registro.</div>}
               </div>
             </div>
+          }
 
-            <div className="thumbs">
-              {(openRecord.photos || []).map((p, i) => (
-                <figure key={i} className="thumb">
-                  <img src={p.url} alt={p.name ?? `photo-${i}`} />
-                  {p.caption && <figcaption>{p.caption}</figcaption>}
-                </figure>
-              ))}
-              {!openRecord.photos?.length && <div className="empty">Sem fotos.</div>}
+          {tabRecords==='mapa' && <RecordsMap/>}
+
+          {tabRecords==='exportar' &&
+            <div style={{display:'grid', gap:12}}>
+              <div style={{opacity:.8}}>Exporta o conjunto filtrado na aba “Lista”.</div>
+              <div style={{display:'flex', gap:10, flexWrap:'wrap'}}>
+                <button onClick={exportXLSX} style={{background:'#14532d', color:'#fff', padding:'10px 14px', borderRadius:10, border:'1px solid #1f2937'}}>Exportar XLSX (CSV)</button>
+                <button onClick={exportCSV} style={{background:'#14532d', color:'#fff', padding:'10px 14px', borderRadius:10, border:'1px solid #1f2937'}}>Exportar CSV</button>
+                <button onClick={exportJSON} style={{background:'#14532d', color:'#fff', padding:'10px 14px', borderRadius:10, border:'1px solid #1f2937'}}>Exportar JSON</button>
+                <button onClick={exportGeoJSON} style={{background:'#14532d', color:'#fff', padding:'10px 14px', borderRadius:10, border:'1px solid #1f2937'}}>Exportar GeoJSON</button>
+                <button onClick={exportGPX} style={{background:'#14532d', color:'#fff', padding:'10px 14px', borderRadius:10, border:'1px solid #1f2937'}}>Exportar GPX</button>
+              </div>
             </div>
-          </div>
-        </div>
-      )}
-
-      {toast && <Toast text={toast} />}
+          }
+        </Section>
+      </div>
     </div>
   )
 }
+
+export default App
