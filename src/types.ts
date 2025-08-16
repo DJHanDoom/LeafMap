@@ -1,32 +1,29 @@
 export type LatLng = { lat: number; lng: number }
+export type LifeForm = 'árvore' | 'arbusto' | 'erva' | 'trepadeira' | 'cipó' | 'epífita' | 'palmeira' | 'samambaia'
 
-export type LifeForm =
-  | 'arvore'
-  | 'arbusto'
-  | 'erva'
-  | 'cipo'
-  | 'epifita'
-  | 'palmeira'
-  | 'liana'
-  | 'outra'
-
-export type PhotoRef = {
-  url: string
-  name?: string
-  caption?: string
-}
+export type PhotoRef = { url: string; name?: string; caption?: string }
 
 export type Morphology = {
   formaVida?: LifeForm | string
-  floresPresenca?: boolean
-  floresDescricao?: string
-  frutosPresenca?: boolean
-  frutosDescricao?: string
-  saude?: 'saudavel' | 'regular' | 'debilitado' | 'morto' | string
+  flores?: string
+  flores_desc?: string
+  frutos?: string
+  frutos_desc?: string
+  saude?: string
+
+  folha__tipo?: string
+  folha__margem?: string
+  folha__filotaxia?: string
+  folha__nervacao?: string
+  estipulas?: string
+  indumento?: string
+  casca?: string
+
   cap_cm?: number
   altura_m?: number
-  camposPersonalizaveis?: Record<string, string>
-  observacoesLivres?: string
+  obs?: string
+
+  custom?: string
 }
 
 export type TreeRecord = {
@@ -35,8 +32,8 @@ export type TreeRecord = {
   commonName?: string
   scientificName?: string
   family?: string
-  morphology: Morphology
-  photos: PhotoRef[]
+  morphology?: Morphology
+  photos?: PhotoRef[]
   createdAt: string
   updatedAt: string
 }
