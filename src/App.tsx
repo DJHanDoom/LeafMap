@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import MapView from './components/MapView'
 import RecordsMap from './components/RecordsMap'
 import PhotoPicker from './components/PhotoPicker'
@@ -13,14 +13,9 @@ import { Share } from '@capacitor/share'
 import { Geolocation } from '@capacitor/geolocation'
 import './theme.css'
 
-/** UFRRJ (fallback se GPS negado) */
 const UFRRJ: LatLng = { lat: -22.745, lng: -43.701 }
-/** Centro genérico do Brasil (inicial) */
 const BR_CENTER: LatLng = { lat: -15.78, lng: -47.93 }
-
-const uuid = () =>
-  'randomUUID' in crypto ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36)
-
+const uuid = () => ('randomUUID' in crypto ? crypto.randomUUID() : Math.random().toString(36).slice(2) + Date.now().toString(36))
 type Mode = 'coleta' | 'registros'
 
 const Brand = () => (
@@ -41,6 +36,7 @@ const Toast = ({ text }: { text: string }) => <div className="toast">{text}</div
 
 export default function App() {
   const [mode, setMode] = useState<Mode>('coleta')
+  const headerRef = useRef<HTMLElement | null>(null)
 
   // Coleta
   const [center, setCenter] = useState<LatLng>(BR_CENTER)
@@ -68,7 +64,30 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null)
   const isNative = useMemo(() => (Capacitor.getPlatform?.() ?? 'web') !== 'web', [])
 
-  /** GPS: 1ª execução pede permissão; se negar, UFRRJ; senão, centra e dá watch */
+  /** mede o header e reserva espaço no conteúdo */
+  function measureHeader() {
+    const h = headerRef.current?.getBoundingClientRect().height ?? 64
+    document.documentElement.style.setProperty('--hdr', `${Math.ceil(h)}px`)
+  }
+  function nudgeResize() {
+    try {
+      window.dispatchEvent(new Event('resize'))
+      setTimeout(() => window.dispatchEvent(new Event('resize')), 200)
+    } catch {}
+  }
+  useEffect(() => {
+    measureHeader()
+    const onResize = () => measureHeader()
+    window.addEventListener('resize', onResize)
+    const id = setInterval(measureHeader, 500) // garante após teclado/anim.
+    return () => { window.removeEventListener('resize', onResize); clearInterval(id) }
+  }, [])
+  useEffect(() => { measureHeader(); nudgeResize() }, [mode, photos.length, !!firstCandidate])
+
+  /** fecha qualquer modal ao voltar para Coletar */
+  useEffect(() => { if (mode === 'coleta') setOpenRecord(null) }, [mode])
+
+  /** GPS inicial/watch */
   useEffect(() => {
     (async () => {
       try {
@@ -87,7 +106,6 @@ export default function App() {
         const id = await Geolocation.watchPosition({ enableHighAccuracy: true, maximumAge: 5000 }, pos => {
           if (pos && pos.coords) {
             const here = { lat: pos.coords.latitude, lng: pos.coords.longitude }
-            // não força recentralizar toda hora; mantém o primeiro center
             setCenter(prev => prev ?? here)
           }
         })
@@ -97,26 +115,13 @@ export default function App() {
   }, [])
 
   /** Carrega registros */
-  useEffect(() => {
-    loadAll().then(r => setAll(r ?? []))
-  }, [])
+  useEffect(() => { loadAll().then(r => setAll(r ?? [])) }, [])
 
-  /** Garante que o Leaflet recalcule o tamanho do mapa */
-  function nudgeResize() {
-    try {
-      window.dispatchEvent(new Event('resize'))
-      setTimeout(() => window.dispatchEvent(new Event('resize')), 250)
-    } catch {}
-  }
-  useEffect(() => { nudgeResize() }, [mode])
-  useEffect(() => { nudgeResize() }, [photos.length, !!firstCandidate])
-
-  /** Inputs não “sumirem” com o teclado */
   function bringIntoView(e: React.FocusEvent<HTMLElement>) {
     try { e.currentTarget.scrollIntoView({ behavior: 'smooth', block: 'center' }) } catch {}
   }
+  function toastMsg(t: string) { setToast(t); setTimeout(() => setToast(null), 1800) }
 
-  /** 1ª foto => aplica EXIF, sem abrir zoom */
   async function confirmFirstPhoto() {
     if (!firstCandidate) return
     const { file, url } = firstCandidate
@@ -129,183 +134,96 @@ export default function App() {
     toastMsg('📍 Posição atualizada (EXIF)')
     nudgeResize()
   }
-
   function onGallery(files: File[]) {
     if (!files?.length) return
     if (!photos.length && !firstCandidate) {
       const [first, ...rest] = files
       setFirstCandidate({ url: URL.createObjectURL(first), file: first })
-      if (rest.length) {
-        const extras = rest.map(f => ({ url: URL.createObjectURL(f), name: f.name }))
-        setPhotos(prev => [...extras, ...prev])
-      }
+      if (rest.length) setPhotos(prev => [...rest.map(f => ({ url: URL.createObjectURL(f), name: f.name })), ...prev])
     } else {
-      const extras = files.map(f => ({ url: URL.createObjectURL(f), name: f.name }))
-      setPhotos(prev => [...extras, ...prev])
+      setPhotos(prev => [...files.map(f => ({ url: URL.createObjectURL(f), name: f.name })), ...prev])
     }
-    toastMsg('🖼️ Foto(s) adicionada(s)')
-    nudgeResize()
+    toastMsg('🖼️ Foto(s) adicionada(s)'); nudgeResize()
   }
-
   async function onCamera(file: File) {
     setFirstCandidate({ url: URL.createObjectURL(file), file })
-    toastMsg('📸 Confirme para aplicar EXIF/GPS')
-    nudgeResize()
+    toastMsg('📸 Confirme para aplicar EXIF/GPS'); nudgeResize()
   }
 
-  function toastMsg(t: string) { setToast(t); setTimeout(() => setToast(null), 1800) }
-
-  /** Reset da coleta */
   function resetForm() {
     setPhotos([]); setFirstCandidate(null)
     setCommon(''); setScientific(''); setFamily(''); setMorph({})
     setFirstISO(undefined)
   }
-
-  /** Salvar (cumulativo) + ir para Registros e focar o novo pin */
   async function saveRecord() {
     const pos = marker ?? center
     const now = new Date().toISOString()
     const rec: TreeRecord = {
-      id: uuid(),
-      position: pos,
+      id: uuid(), position: pos,
       commonName: commonName || undefined,
       scientificName: scientificName || undefined,
       family: family || undefined,
-      morphology: morph,
-      photos,
-      createdAt: firstISO ?? now,
-      updatedAt: now
+      morphology: morph, photos, createdAt: firstISO ?? now, updatedAt: now
     }
     await saveOne(rec)
-    const allNow = await loadAll()
-    setAll(allNow)
-    resetForm()
-    setMode('registros')
-    setFocus(rec.position)
+    const allNow = await loadAll(); setAll(allNow)
+    resetForm(); setMode('registros'); setFocus(rec.position)
     toastMsg('✅ Registro salvo')
   }
 
-  /** ———————— EXPORT (dados) ———————— */
   function scopeRecords(): TreeRecord[] {
-    const subset = filterFamily ? all.filter(r => r.family === filterFamily) : all
-    return subset
+    return filterFamily ? all.filter(r => r.family === filterFamily) : all
   }
-
   function makeJSON(rs: TreeRecord[]) {
-    return JSON.stringify({
-      meta: { app: 'NervuraColetora', exportedAt: new Date().toISOString(), total: rs.length },
-      analysis: summarize(rs),
-      records: rs
-    }, null, 2)
+    return JSON.stringify({ meta:{app:'NervuraColetora',exportedAt:new Date().toISOString(),total:rs.length}, analysis:summarize(rs), records:rs }, null, 2)
   }
-
   function makeGeoJSON(rs: TreeRecord[]) {
-    const fc = {
-      type: 'FeatureCollection',
-      features: rs.map(r => ({
-        type: 'Feature',
-        geometry: { type: 'Point', coordinates: [r.position.lng, r.position.lat] },
-        properties: {
-          id: r.id,
-          commonName: r.commonName,
-          scientificName: r.scientificName,
-          family: r.family,
-          morphology: r.morphology,
-          photos: r.photos?.map(p => p.url),
-          createdAt: r.createdAt,
-          updatedAt: r.updatedAt
-        }
-      }))
-    }
+    const fc = { type:'FeatureCollection', features: rs.map(r => ({
+      type:'Feature',
+      geometry:{ type:'Point', coordinates:[r.position.lng, r.position.lat] },
+      properties:{ id:r.id, commonName:r.commonName, scientificName:r.scientificName, family:r.family, morphology:r.morphology, photos:r.photos?.map(p=>p.url), createdAt:r.createdAt, updatedAt:r.updatedAt }
+    })) }
     return JSON.stringify(fc, null, 2)
   }
-
   function makeCSV(rs: TreeRecord[]) {
     const head = ['id','lat','lng','commonName','scientificName','family','formaVida','cap_cm','altura_m','createdAt']
-    const rows = rs.map(r => [
-      r.id, r.position.lat, r.position.lng,
-      q(r.commonName), q(r.scientificName), q(r.family),
-      r.morphology?.formaVida ?? '', r.morphology?.cap_cm ?? '', r.morphology?.altura_m ?? '',
-      r.createdAt
-    ].join(','))
+    const rows = rs.map(r => [r.id,r.position.lat,r.position.lng, q(r.commonName),q(r.scientificName),q(r.family), r.morphology?.formaVida??'', r.morphology?.cap_cm??'', r.morphology?.altura_m??'', r.createdAt].join(','))
     return [head.join(','), ...rows].join('\n')
-    function q(v?: string){ return v ? `"${String(v).replace(/"/g,'""')}"` : '' }
+    function q(v?:string){ return v?`"${String(v).replace(/"/g,'""')}"`:'' }
   }
-
   function makeGPX(rs: TreeRecord[]) {
-    const wpts = rs.map(r => `
-  <wpt lat="${r.position.lat}" lon="${r.position.lng}">
-    <name>${xml(r.commonName ?? r.scientificName ?? r.id)}</name>
-    <time>${r.createdAt}</time>
-  </wpt>`).join('\n')
-    return `<?xml version="1.0" encoding="UTF-8"?>
-<gpx version="1.1" creator="NervuraColetora" xmlns="http://www.topografix.com/GPX/1/1">
-${wpts}
-</gpx>`.trim()
-    function xml(s:string){ return s.replace(/[<&>]/g, m => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[m] as string)) }
+    const wpts = rs.map(r=>`\n  <wpt lat="${r.position.lat}" lon="${r.position.lng}"><name>${xml(r.commonName ?? r.scientificName ?? r.id)}</name><time>${r.createdAt}</time></wpt>`).join('')
+    return `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="NervuraColetora" xmlns="http://www.topografix.com/GPX/1/1">${wpts}\n</gpx>`
+    function xml(s:string){ return s.replace(/[<&>]/g, m=>({ '<':'&lt;','>':'&gt;','&':'&amp;' }[m] as string)) }
   }
-
   async function makeXLSXBlob(rs: TreeRecord[]) {
     // @ts-ignore
-    let XLSX: any
-    try { XLSX = await import('xlsx/xlsx.mjs') } catch { XLSX = await import('xlsx') }
-    const rows = rs.map(r => ({
-      id:r.id, lat:r.position.lat, lng:r.position.lng,
-      commonName:r.commonName ?? '', scientificName:r.scientificName ?? '',
-      family:r.family ?? '', formaVida:r.morphology?.formaVida ?? '',
-      cap_cm:r.morphology?.cap_cm ?? '', altura_m:r.morphology?.altura_m ?? '',
-      createdAt:r.createdAt
-    }))
-    const ws = XLSX.utils.json_to_sheet(rows)
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, 'Registros')
-    const out = XLSX.write(wb, { bookType:'xlsx', type:'array' })
-    return new Blob([out], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+    let XLSX:any; try { XLSX = await import('xlsx/xlsx.mjs') } catch { XLSX = await import('xlsx') }
+    const rows = rs.map(r => ({ id:r.id, lat:r.position.lat, lng:r.position.lng, commonName:r.commonName??'', scientificName:r.scientificName??'', family:r.family??'', formaVida:r.morphology?.formaVida??'', cap_cm:r.morphology?.cap_cm??'', altura_m:r.morphology?.altura_m??'', createdAt:r.createdAt }))
+    const ws = XLSX.utils.json_to_sheet(rows); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Registros')
+    const out = XLSX.write(wb, { bookType:'xlsx', type:'array' }); return new Blob([out], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
   }
-
   async function doExport() {
-    const rs = scopeRecords()
-    if (!rs.length) { toastMsg('Nada para exportar'); return }
+    const rs = scopeRecords(); if (!rs.length) { toastMsg('Nada para exportar'); return }
     const ts = new Date().toISOString().slice(0,19)
-    const tasks: {name:string; mime:string; blob: Promise<Blob>}[] = []
-    if (exportSel.json)    tasks.push({ name:`nervura-${ts}.json`,    mime:'application/json',                      blob: Promise.resolve(new Blob([makeJSON(rs)],{type:'application/json'})) })
-    if (exportSel.geojson) tasks.push({ name:`nervura-${ts}.geojson`, mime:'application/geo+json',                  blob: Promise.resolve(new Blob([makeGeoJSON(rs)],{type:'application/geo+json'})) })
-    if (exportSel.csv)     tasks.push({ name:`nervura-${ts}.csv`,     mime:'text/csv',                              blob: Promise.resolve(new Blob([makeCSV(rs)],{type:'text/csv'})) })
-    if (exportSel.gpx)     tasks.push({ name:`nervura-${ts}.gpx`,     mime:'application/gpx+xml',                   blob: Promise.resolve(new Blob([makeGPX(rs)],{type:'application/gpx+xml'})) })
-    if (exportSel.xlsx)    tasks.push({ name:`nervura-${ts}.xlsx`,    mime:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', blob: makeXLSXBlob(rs) })
+    const tasks:{name:string; mime:string; blob:Promise<Blob>}[] = []
+    tasks.push({ name:`nervura-${ts}.json`,    mime:'application/json',       blob: Promise.resolve(new Blob([makeJSON(rs)],{type:'application/json'})) })
+    tasks.push({ name:`nervura-${ts}.geojson`, mime:'application/geo+json',   blob: Promise.resolve(new Blob([makeGeoJSON(rs)],{type:'application/geo+json'})) })
+    if (exportSel.csv)  tasks.push({ name:`nervura-${ts}.csv`,  mime:'text/csv',            blob: Promise.resolve(new Blob([makeCSV(rs)],{type:'text/csv'})) })
+    if (exportSel.gpx)  tasks.push({ name:`nervura-${ts}.gpx`,  mime:'application/gpx+xml', blob: Promise.resolve(new Blob([makeGPX(rs)],{type:'application/gpx+xml'})) })
+    if (exportSel.xlsx) tasks.push({ name:`nervura-${ts}.xlsx`, mime:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', blob: makeXLSXBlob(rs) })
 
-    const isNative = (Capacitor.getPlatform?.() ?? 'web') !== 'web'
-    if (!isNative) {
-      for (const t of tasks) {
-        const b = await t.blob
-        const a = document.createElement('a')
-        a.href = URL.createObjectURL(b)
-        a.download = t.name
-        a.click(); URL.revokeObjectURL(a.href)
-      }
-      setExportOpen(false); toastMsg('Exportado')
-      return
+    if ((Capacitor.getPlatform?.() ?? 'web') === 'web') {
+      for (const t of tasks){ const b=await t.blob; const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download=t.name; a.click(); URL.revokeObjectURL(a.href) }
+      setExportOpen(false); toastMsg('Exportado'); return
     }
-
-    const fileUris: string[] = []
-    for (const t of tasks) {
-      const b = await t.blob
-      const arr = await b.arrayBuffer()
-      await Filesystem.writeFile({ path:t.name, data:b64(arr), directory: Directory.Cache, encoding: Encoding.BASE64 })
-      const uri = (await Filesystem.getUri({ path:t.name, directory: Directory.Cache })).uri
-      fileUris.push(uri)
-    }
-    try {
-      await Share.share({ title:'Exportar dados — NervuraColetora', text:`Exportados ${rs.length} registro(s).`, files:fileUris, dialogTitle:'Compartilhar exportações' })
-      toastMsg('Exportado')
-    } catch { toastMsg('Compartilhamento não disponível') }
-    setExportOpen(false)
+    const fileUris:string[]=[]
+    for (const t of tasks){ const b=await t.blob; const ab=await b.arrayBuffer(); await Filesystem.writeFile({ path:t.name, data:b64(ab), directory:Directory.Cache, encoding:Encoding.BASE64 }); const uri=(await Filesystem.getUri({ path:t.name, directory:Directory.Cache })).uri; fileUris.push(uri) }
+    try { await Share.share({ title:'Exportar dados — NervuraColetora', text:`Exportados ${rs.length} registro(s).`, files:fileUris, dialogTitle:'Compartilhar exportações' }) } catch {}
+    setExportOpen(false); toastMsg('Exportado')
   }
-
   function b64(buf:ArrayBuffer){ let s=''; const b=new Uint8Array(buf); for (let i=0;i<b.length;i++) s+=String.fromCharCode(b[i]); return btoa(s) }
 
-  /** Compartilhar 1 registro (texto + fotos) */
   async function shareRecord(r: TreeRecord) {
     const texto = [
       'Registro botânico — NervuraColetora',
@@ -318,31 +236,19 @@ ${wpts}
       r.morphology ? `Notas morfológicas: ${summMorph(r.morphology)}` : null
     ].filter(Boolean).join('\n')
 
-    const isNative = (Capacitor.getPlatform?.() ?? 'web') !== 'web'
-    if (!isNative) {
-      await navigator.clipboard?.writeText(texto)
-      toastMsg('Texto copiado — cole no Facebook')
-      return
+    if ((Capacitor.getPlatform?.() ?? 'web') === 'web') { await navigator.clipboard?.writeText(texto); toastMsg('Texto copiado — cole no Facebook'); return }
+    const files:string[]=[]
+    for (let i=0;i<(r.photos?.length ?? 0);i++){
+      const p=r.photos![i]
+      try{ const blob=await fetch(p.url).then(x=>x.blob()); const ab=await blob.arrayBuffer(); const name=`registro-${r.id}-${i}.jpg`
+        await Filesystem.writeFile({ path:name, data:b64(ab), directory:Directory.Cache, encoding:Encoding.BASE64 })
+        const uri=(await Filesystem.getUri({ path:name, directory:Directory.Cache })).uri; files.push(uri)
+      }catch{}
     }
-    const files: string[] = []
-    for (let i=0; i<(r.photos?.length ?? 0); i++) {
-      const p = r.photos![i]
-      try {
-        const blob = await fetch(p.url).then(x=>x.blob())
-        const buf = await blob.arrayBuffer()
-        const name = `registro-${r.id}-${i}.jpg`
-        await Filesystem.writeFile({ path:name, data:b64(buf), directory: Directory.Cache, encoding: Encoding.BASE64 })
-        const uri = (await Filesystem.getUri({ path:name, directory: Directory.Cache })).uri
-        files.push(uri)
-      } catch {}
-    }
-    try {
-      await Share.share({ title: r.commonName ?? r.scientificName ?? 'Registro botânico', text: texto, files, dialogTitle: 'Compartilhar registro' })
-    } catch {}
+    try { await Share.share({ title: r.commonName ?? r.scientificName ?? 'Registro botânico', text: texto, files, dialogTitle:'Compartilhar registro' }) } catch {}
   }
-
   function summMorph(m: Morphology) {
-    const parts: string[] = []
+    const parts:string[]=[]
     if (m.formaVida) parts.push(`Forma de vida: ${m.formaVida}`)
     if (m.folha__tipo) parts.push(`Folha: ${m.folha__tipo}`)
     if (m.folha__margem) parts.push(`Margem: ${m.folha__margem}`)
@@ -356,21 +262,16 @@ ${wpts}
     if (m.obs) parts.push(`Obs: ${m.obs}`)
     return parts.join(' · ')
   }
-
   function summarize(rs: TreeRecord[]) {
-    const byFam = new Map<string, number>(), byLife = new Map<string, number>()
-    rs.forEach(r => {
-      if (r.family) byFam.set(r.family, (byFam.get(r.family) ?? 0)+1)
-      const lf = r.morphology?.formaVida; if (lf) byLife.set(lf, (byLife.get(lf) ?? 0)+1)
-    })
-    const enr = (m:Map<string,number>) => Array.from(m.entries()).sort((a,b)=>b[1]-a[1]).map(([k,n])=>({k,n}))
-    return { porFamilia: enr(byFam), porFormaDeVida: enr(byLife) }
+    const byFam=new Map<string,number>(), byLife=new Map<string,number>()
+    rs.forEach(r=>{ if(r.family) byFam.set(r.family,(byFam.get(r.family)??0)+1); const lf=r.morphology?.formaVida; if(lf) byLife.set(lf,(byLife.get(lf)??0)+1) })
+    const enr=(m:Map<string,number>)=>Array.from(m.entries()).sort((a,b)=>b[1]-a[1]).map(([k,n])=>({k,n}))
+    return { porFamilia:enr(byFam), porFormaDeVida:enr(byLife) }
   }
 
-  // ———————— UI ————————
   return (
     <div className="app-root app-shell">
-      <header className="app-header">
+      <header className="app-header" ref={headerRef as any}>
         <div className="topbar">
           <Brand />
           <div className="tabs">
@@ -382,13 +283,9 @@ ${wpts}
 
       {mode === 'coleta' ? (
         <main className="content app-content">
-          {/* fotos */}
           <Section title="Fotos">
-            <div className="row">
-              <PhotoPicker onCamera={onCamera} onGallery={onGallery} />
-            </div>
+            <PhotoPicker onCamera={onCamera} onGallery={onGallery} />
             <small className="hint">Dica: use a câmera para capturar EXIF/GPS quando disponível.</small>
-
             {firstCandidate && (
               <div className="confirm-first">
                 <img src={firstCandidate.url} className="thumb-first" />
@@ -400,53 +297,46 @@ ${wpts}
             )}
           </Section>
 
-          {/* identificação */}
           <Section title="Identificação">
             <div className="form-grid">
               <div className="form-field">
                 <label>Nome popular</label>
-                <input value={commonName} onChange={e=>setCommon(e.target.value)} onFocus={bringIntoView}
-                       placeholder="ex.: Ipê-amarelo" />
+                <input value={commonName} onChange={e=>setCommon(e.target.value)} onFocus={bringIntoView} placeholder="ex.: Ipê-amarelo" />
               </div>
               <div className="form-field">
                 <label>Nome científico</label>
-                <input value={scientificName} onChange={e=>setScientific(e.target.value)} onFocus={bringIntoView}
-                       placeholder="ex.: Handroanthus albus" autoCapitalize="none" />
+                <input value={scientificName} onChange={e=>setScientific(e.target.value)} onFocus={bringIntoView} placeholder="ex.: Handroanthus albus" autoCapitalize="none" />
               </div>
               <div className="form-field">
                 <label>Família (auto)</label>
-                <input value={family} onChange={e=>setFamily(e.target.value)} onFocus={bringIntoView}
-                       placeholder="ex.: Bignoniaceae" />
+                <input value={family} onChange={e=>setFamily(e.target.value)} onFocus={bringIntoView} placeholder="ex.: Bignoniaceae" />
               </div>
             </div>
           </Section>
 
-          {/* mapa coleta */}
           <Section title="Posição no mapa (toque para mover / arraste o marcador)">
             <div className="map-frame">
               <MapView
                 center={center}
                 marker={marker ?? center}
                 lifeForm={morph.formaVida as LifeForm}
-                onMoveMarker={pos => { setMarker(pos) }}
+                onMoveMarker={pos => setMarker(pos)}
                 height={260}
               />
             </div>
           </Section>
 
-          {/* morfologia completa */}
           <Section title="Características morfológicas">
             <MorphologyForm value={morph} onChange={setMorph} />
           </Section>
 
-          {/* galeria */}
           <Section title="Fotos do indivíduo">
             <Gallery photos={photos} onChange={setPhotos} />
           </Section>
 
           <div className="footer-actions actions">
             <button className="btn primary" onClick={saveRecord}>Salvar registro</button>
-            <button className="btn warn" onClick={async () => { await wipeAll(); setAll([]); toastMsg('Tudo apagado') }}>Apagar tudo</button>
+            <button className="btn warn" onClick={async()=>{ await wipeAll(); setAll([]); toastMsg('Tudo apagado') }}>Apagar tudo</button>
           </div>
         </main>
       ) : (
@@ -457,17 +347,14 @@ ${wpts}
                 <label>Filtrar por família</label>
                 <select value={filterFamily} onChange={e=>setFilterFamily(e.target.value)}>
                   <option value="">Todas</option>
-                  {Array.from(new Set(all.map(r=>r.family).filter(Boolean) as string[])).map(f =>
-                    <option key={f} value={f}>{f}</option>
-                  )}
+                  {Array.from(new Set(all.map(r=>r.family).filter(Boolean) as string[])).map(f => <option key={f} value={f}>{f}</option>)}
                 </select>
               </div>
-
               <div className="export-box">
                 <button className="btn" onClick={()=>setExportOpen(v=>!v)}>Exportar ▾</button>
                 {exportOpen && (
                   <div className="export-panel">
-                    {([['json','JSON'],['geojson','GeoJSON'],['csv','CSV'],['gpx','GPX'],['xlsx','XLSX']] as const).map(([k,label]) => (
+                    {([['json','JSON'],['geojson','GeoJSON'],['csv','CSV'],['gpx','GPX'],['xlsx','XLSX']] as const).map(([k,label])=>(
                       <label key={k} className="check">
                         <input type="checkbox" checked={(exportSel as any)[k]} onChange={()=>setExportSel(o=>({...o,[k]:!(o as any)[k]}))}/>
                         <span>{label}</span>
@@ -503,7 +390,6 @@ ${wpts}
         </main>
       )}
 
-      {/* Modal registro */}
       {openRecord && (
         <div className="modal" onClick={()=>setOpenRecord(null)}>
           <div className="modal-content" onClick={e=>e.stopPropagation()}>
