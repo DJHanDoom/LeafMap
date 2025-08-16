@@ -98,3 +98,139 @@ select.small{padding:6px 8px}
 
 .confirm-first{margin-top:8px;display:flex;align-items:center;gap:10px}
 .thumb-first{width:120px;height:90px;object-fit:cover;border-radius:10px;border:1px solid var(--stroke)}
+/* zera margens padrão */
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: #0c0c0c;
+}
+
+/* respeitar notches/statusbar */
+body {
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* layout da página: header fixo + conteúdo rolável */
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh; /* usa viewport moderno – lida melhor com teclado */
+}
+
+.app-header {
+  position: sticky;       /* fica visível sempre */
+  top: 0;
+  z-index: 10;
+  background: #111;       /* tema escuro */
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  padding: 10px 12px;
+}
+
+/* garante espaço pra header quando o UA ignora o sticky por causa do teclado */
+.app-content {
+  flex: 1 1 auto;
+  overflow: auto;         /* rola conteúdo */
+  -webkit-overflow-scrolling: touch;
+}
+
+/* cartões/seções */
+.card {
+  background: #141414;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 14px;
+  padding: 14px;
+  margin: 12px;
+}
+
+/* Mapa: altura fixa estável (evita "meio mapa") */
+.map-wrap {
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,0.07);
+  height: 320px;            /* ajuste conforme preferir */
+}
+.map-wrap .leaflet-container {
+  height: 100%;
+  width: 100%;
+}
+
+/* barra de abas/topo (Coletar / Registros) */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.topbar img.brand {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  object-fit: cover;
+}
+.topbar .title {
+  font-weight: 700;
+  color: #fff;
+  margin-right: auto;
+}
+.tabs {
+  display: inline-flex;
+  gap: 8px;
+}
+.tab-btn {
+  background: #184a2b;      /* verde escuro */
+  color: #dfeee5;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+.tab-btn.secondary {
+  background: #1a1a1a;
+  color: #e7e7e7;
+}
+
+/* inputs */
+.input, .select, textarea {
+  background: #171717;
+  color: #e8e8e8;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 10px;
+  padding: 10px 12px;
+  width: 100%;
+}
+
+/* evita que thumbnails cresçam demais */
+.thumb-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+.thumb {
+  aspect-ratio: 1 / 1;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #0f0f0f;
+  border: 1px solid rgba(255,255,255,0.06);
+}
+.thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* botões de ação */
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px;
+}
+.btn {
+  background: #1d6b3b;  /* verde principal */
+  color: #fff;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+.btn.warn { background: #a22b2b; }
+
