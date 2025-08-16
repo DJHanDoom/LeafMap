@@ -2,34 +2,21 @@
 <html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- ✅ evita teclado cobrindo conteúdo e respeita notches/safe-areas -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
+    />
     <title>NervuraColetora</title>
     <style>
-      body {
-        margin: 0;
-        padding: 0;
-        background-color: #000; /* fundo preto */
-        color: #d4af37; /* dourado */
-        font-family: "Segoe UI", Roboto, sans-serif;
-      }
-      #root {
-        height: 100vh;
-        width: 100vw;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-      }
-      .loading {
-        color: #32cd32; /* verde vivo */
-        font-size: 1.2rem;
-        font-weight: bold;
-      }
+      /* tela de loading mínima; restante do tema está em src/theme.css */
+      html, body { margin:0; padding:0; height:100%; background:#000; color:#d4af37; font-family: "Segoe UI", Roboto, sans-serif; }
+      #root { height:100%; display:flex; align-items:center; justify-content:center; }
+      .loading { color:#32cd32; font-weight:600; }
     </style>
   </head>
   <body>
-    <div id="root">
-      <div class="loading">Carregando NervuraColetora...</div>
-    </div>
+    <div id="root"><div class="loading">Carregando NervuraColetora...</div></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
