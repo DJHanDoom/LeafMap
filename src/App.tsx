@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import MapView from './components/MapView'
 import RecordsMap from './components/RecordsMap'
 import PhotoPicker from './components/PhotoPicker'
@@ -15,7 +15,7 @@ import './theme.css'
 
 /** UFRRJ (fallback se GPS negado) */
 const UFRRJ: LatLng = { lat: -22.745, lng: -43.701 }
-/** Se GPS concedido mas indisponível, um centro genérico do Brasil */
+/** Centro genérico do Brasil (inicial) */
 const BR_CENTER: LatLng = { lat: -15.78, lng: -47.93 }
 
 const uuid = () =>
@@ -68,7 +68,7 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null)
   const isNative = useMemo(() => (Capacitor.getPlatform?.() ?? 'web') !== 'web', [])
 
-  /** ————— GPS: 1ª execução pede permissão; se negar, UFRRJ; senão, centra e dá watch ————— */
+  /** GPS: 1ª execução pede permissão; se negar, UFRRJ; senão, centra e dá watch */
   useEffect(() => {
     (async () => {
       try {
@@ -81,18 +81,16 @@ export default function App() {
         const here = { lat: current.coords.latitude, lng: current.coords.longitude }
         setCenter(here); setMarker(here)
       } catch {
-        // fallback UFRRJ
         setCenter(UFRRJ); setMarker(UFRRJ)
       }
-      // watch
       try {
         const id = await Geolocation.watchPosition({ enableHighAccuracy: true, maximumAge: 5000 }, pos => {
           if (pos && pos.coords) {
             const here = { lat: pos.coords.latitude, lng: pos.coords.longitude }
+            // não força recentralizar toda hora; mantém o primeiro center
             setCenter(prev => prev ?? here)
           }
         })
-        // Capacitor 6 retorna string / number; ignorar unwatch no webview
         void id
       } catch {}
     })()
@@ -102,6 +100,16 @@ export default function App() {
   useEffect(() => {
     loadAll().then(r => setAll(r ?? []))
   }, [])
+
+  /** Garante que o Leaflet recalcule o tamanho do mapa */
+  function nudgeResize() {
+    try {
+      window.dispatchEvent(new Event('resize'))
+      setTimeout(() => window.dispatchEvent(new Event('resize')), 250)
+    } catch {}
+  }
+  useEffect(() => { nudgeResize() }, [mode])
+  useEffect(() => { nudgeResize() }, [photos.length, !!firstCandidate])
 
   /** Inputs não “sumirem” com o teclado */
   function bringIntoView(e: React.FocusEvent<HTMLElement>) {
@@ -119,11 +127,11 @@ export default function App() {
     if (dt) setFirstISO(dt.toISOString())
     setFirstCandidate(null)
     toastMsg('📍 Posição atualizada (EXIF)')
+    nudgeResize()
   }
 
   function onGallery(files: File[]) {
     if (!files?.length) return
-    // se ainda não há 1ª foto confirmada, considere a 1ª como candidata
     if (!photos.length && !firstCandidate) {
       const [first, ...rest] = files
       setFirstCandidate({ url: URL.createObjectURL(first), file: first })
@@ -136,11 +144,13 @@ export default function App() {
       setPhotos(prev => [...extras, ...prev])
     }
     toastMsg('🖼️ Foto(s) adicionada(s)')
+    nudgeResize()
   }
 
   async function onCamera(file: File) {
     setFirstCandidate({ url: URL.createObjectURL(file), file })
     toastMsg('📸 Confirme para aplicar EXIF/GPS')
+    nudgeResize()
   }
 
   function toastMsg(t: string) { setToast(t); setTimeout(() => setToast(null), 1800) }
@@ -265,8 +275,8 @@ ${wpts}
     if (exportSel.gpx)     tasks.push({ name:`nervura-${ts}.gpx`,     mime:'application/gpx+xml',                   blob: Promise.resolve(new Blob([makeGPX(rs)],{type:'application/gpx+xml'})) })
     if (exportSel.xlsx)    tasks.push({ name:`nervura-${ts}.xlsx`,    mime:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', blob: makeXLSXBlob(rs) })
 
+    const isNative = (Capacitor.getPlatform?.() ?? 'web') !== 'web'
     if (!isNative) {
-      // web: baixa
       for (const t of tasks) {
         const b = await t.blob
         const a = document.createElement('a')
@@ -278,38 +288,24 @@ ${wpts}
       return
     }
 
-    // Android: grava e compartilha
     const fileUris: string[] = []
     for (const t of tasks) {
       const b = await t.blob
       const arr = await b.arrayBuffer()
-      await Filesystem.writeFile({
-        path: t.name,
-        data: b64(arr),
-        directory: Directory.Cache,
-        encoding: Encoding.BASE64
-      })
-      const uri = (await Filesystem.getUri({ path: t.name, directory: Directory.Cache })).uri
+      await Filesystem.writeFile({ path:t.name, data:b64(arr), directory: Directory.Cache, encoding: Encoding.BASE64 })
+      const uri = (await Filesystem.getUri({ path:t.name, directory: Directory.Cache })).uri
       fileUris.push(uri)
     }
-
     try {
-      await Share.share({
-        title: 'Exportar dados — NervuraColetora',
-        text: `Exportados ${rs.length} registro(s).`,
-        files: fileUris,
-        dialogTitle: 'Compartilhar exportações'
-      })
+      await Share.share({ title:'Exportar dados — NervuraColetora', text:`Exportados ${rs.length} registro(s).`, files:fileUris, dialogTitle:'Compartilhar exportações' })
       toastMsg('Exportado')
-    } catch {
-      toastMsg('Compartilhamento não disponível')
-    }
+    } catch { toastMsg('Compartilhamento não disponível') }
     setExportOpen(false)
   }
 
   function b64(buf:ArrayBuffer){ let s=''; const b=new Uint8Array(buf); for (let i=0;i<b.length;i++) s+=String.fromCharCode(b[i]); return btoa(s) }
 
-  /** ———————— Compartilhar 1 registro (texto + fotos) ———————— */
+  /** Compartilhar 1 registro (texto + fotos) */
   async function shareRecord(r: TreeRecord) {
     const texto = [
       'Registro botânico — NervuraColetora',
@@ -322,6 +318,7 @@ ${wpts}
       r.morphology ? `Notas morfológicas: ${summMorph(r.morphology)}` : null
     ].filter(Boolean).join('\n')
 
+    const isNative = (Capacitor.getPlatform?.() ?? 'web') !== 'web'
     if (!isNative) {
       await navigator.clipboard?.writeText(texto)
       toastMsg('Texto copiado — cole no Facebook')
@@ -340,12 +337,7 @@ ${wpts}
       } catch {}
     }
     try {
-      await Share.share({
-        title: r.commonName ?? r.scientificName ?? 'Registro botânico',
-        text: texto,
-        files,
-        dialogTitle: 'Compartilhar registro'
-      })
+      await Share.share({ title: r.commonName ?? r.scientificName ?? 'Registro botânico', text: texto, files, dialogTitle: 'Compartilhar registro' })
     } catch {}
   }
 
@@ -365,7 +357,6 @@ ${wpts}
     return parts.join(' · ')
   }
 
-  /** Análise simples */
   function summarize(rs: TreeRecord[]) {
     const byFam = new Map<string, number>(), byLife = new Map<string, number>()
     rs.forEach(r => {
@@ -378,17 +369,19 @@ ${wpts}
 
   // ———————— UI ————————
   return (
-    <div className="app-root">
+    <div className="app-root app-shell">
       <header className="app-header">
-        <Brand />
-        <div className="tabs">
-          <button className={mode==='coleta'?'tab active':'tab'} onClick={()=>setMode('coleta')}>Coletar</button>
-          <button className={mode==='registros'?'tab active':'tab'} onClick={()=>setMode('registros')}>Registros</button>
+        <div className="topbar">
+          <Brand />
+          <div className="tabs">
+            <button className={mode==='coleta'?'tab active':'tab'} onClick={()=>setMode('coleta')}>Coletar</button>
+            <button className={mode==='registros'?'tab active':'tab'} onClick={()=>setMode('registros')}>Registros</button>
+          </div>
         </div>
       </header>
 
       {mode === 'coleta' ? (
-        <main className="content">
+        <main className="content app-content">
           {/* fotos */}
           <Section title="Fotos">
             <div className="row">
@@ -451,13 +444,13 @@ ${wpts}
             <Gallery photos={photos} onChange={setPhotos} />
           </Section>
 
-          <div className="footer-actions">
+          <div className="footer-actions actions">
             <button className="btn primary" onClick={saveRecord}>Salvar registro</button>
-            <button className="btn danger" onClick={async () => { await wipeAll(); setAll([]); toastMsg('Tudo apagado') }}>Apagar tudo</button>
+            <button className="btn warn" onClick={async () => { await wipeAll(); setAll([]); toastMsg('Tudo apagado') }}>Apagar tudo</button>
           </div>
         </main>
       ) : (
-        <main className="content">
+        <main className="content app-content">
           <Section title="Registros">
             <div className="row gap">
               <div className="form-field" style={{flex:1}}>
@@ -496,7 +489,6 @@ ${wpts}
               />
             </div>
 
-            {/* lista cumulativa */}
             <div className="list">
               {scopeRecords().map(r => (
                 <button key={r.id} className="list-item" onClick={()=>{ setOpenRecord(r); setFocus(r.position) }}>
